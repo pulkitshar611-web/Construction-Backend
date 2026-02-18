@@ -50,6 +50,14 @@ const updateTask = async (req, res, next) => {
             throw new Error('Task not found');
         }
 
+        // If trying to complete, check OTP if it exists
+        if (req.body.status === 'completed' && task.completionOTP) {
+            if (req.body.otp !== task.completionOTP) {
+                res.status(400);
+                throw new Error('Invalid Completion OTP');
+            }
+        }
+
         const updatedTask = await Task.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
             runValidators: true
@@ -80,8 +88,27 @@ const deleteTask = async (req, res, next) => {
     }
 };
 
+// @desc    Get my tasks
+// @route   GET /api/tasks/my-tasks
+// @access  Private
+const getMyTasks = async (req, res, next) => {
+    try {
+        const tasks = await Task.find({
+            companyId: req.user.companyId,
+            assignedTo: req.user._id
+        })
+            .populate('projectId', 'name')
+            .sort({ dueDate: 1 });
+
+        res.json(tasks);
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getTasks,
+    getMyTasks,
     createTask,
     updateTask,
     deleteTask

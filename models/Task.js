@@ -48,6 +48,9 @@ const taskSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
+    },
+    completionOTP: {
+        type: String
     }
 }, {
     timestamps: true

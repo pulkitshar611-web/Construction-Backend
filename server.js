@@ -31,6 +31,7 @@ const reportRoutes = require('./routes/reportRoutes');
 const roleRoutes = require('./routes/roleRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const planRoutes = require('./routes/planRoutes');
+const jobRoutes = require('./routes/jobRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -76,6 +77,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/plans', planRoutes);
+app.use('/api/jobs', jobRoutes);
 
 // Root Route
 app.get('/', (req, res) => {
@@ -102,7 +104,7 @@ app.set('io', io);
 // Error Handler
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

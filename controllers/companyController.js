@@ -18,6 +18,23 @@ const getDashboardStats = async (req, res, next) => {
         const endOfToday = new Date(today.setHours(23, 59, 59, 999));
 
         const companyId = req.user.companyId;
+        const userId = req.user._id;
+        const role = req.user.role;
+
+        const isStaff = ['WORKER', 'FOREMAN'].includes(role);
+
+        // Define filters based on role
+        const taskFilter = { companyId };
+        const projectFilter = { companyId, status: 'active' };
+        const issueFilter = { companyId, status: 'open' };
+
+        if (isStaff) {
+            taskFilter.assignedTo = userId;
+            // For staff, we show projects where they have active tasks
+            const staffTasks = await Task.find({ assignedTo: userId }).select('projectId');
+            const projectIds = staffTasks.map(t => t.projectId).filter(id => id);
+            projectFilter._id = { $in: projectIds };
+        }
 
         // Parallel counts for cards
         const [
@@ -29,10 +46,10 @@ const getDashboardStats = async (req, res, next) => {
             totalPhotosToday,
             onSiteEmployees
         ] = await Promise.all([
-            Task.countDocuments({ companyId, dueDate: { $gte: startOfToday, $lte: endOfToday } }),
-            Task.countDocuments({ companyId, status: { $ne: 'completed' }, dueDate: { $lt: startOfToday } }),
-            Project.countDocuments({ companyId, status: 'active' }),
-            Issue.countDocuments({ companyId, status: 'open' }),
+            Task.countDocuments({ ...taskFilter, dueDate: { $gte: startOfToday, $lte: endOfToday } }),
+            Task.countDocuments({ ...taskFilter, status: { $ne: 'completed' }, dueDate: { $lt: startOfToday } }),
+            Project.countDocuments(projectFilter),
+            Issue.countDocuments(issueFilter),
             Invoice.countDocuments({ companyId, status: { $in: ['unpaid', 'partially_paid', 'overdue'] } }),
             Photo.countDocuments({ companyId, createdAt: { $gte: startOfToday } }),
             TimeLog.countDocuments({ companyId, clockOut: { $exists: false } })
@@ -46,7 +63,7 @@ const getDashboardStats = async (req, res, next) => {
         const outstandingAmount = unpaidInvoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
 
         // Project Progress (Bar Chart Data)
-        const activeProjectsList = await Project.find({ companyId, status: 'active' }).limit(5);
+        const activeProjectsList = await Project.find(projectFilter).limit(5);
 
         const barData = await Promise.all(activeProjectsList.map(async (p) => {
             const pos = await PurchaseOrder.find({ projectId: p._id, status: 'received' });
@@ -61,7 +78,7 @@ const getDashboardStats = async (req, res, next) => {
 
         // Task Distribution (Pie Chart Data)
         const taskStats = await Task.aggregate([
-            { $match: { companyId } },
+            { $match: taskFilter },
             { $group: { _id: "$status", count: { $sum: 1 } } }
         ]);
 
