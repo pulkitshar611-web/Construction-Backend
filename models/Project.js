@@ -47,6 +47,10 @@ const projectSchema = new mongoose.Schema({
     image: {
         type: String // Base64 or URL
     },
+    pmId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

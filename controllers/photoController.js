@@ -8,20 +8,50 @@ const getPhotos = async (req, res, next) => {
     try {
         const query = { companyId: req.user.companyId };
 
-        // Filter projects for clients
-        if (req.user.role === 'CLIENT') {
-            const clientProjects = await Project.find({ clientId: req.user._id }).select('_id');
-            const projectIds = clientProjects.map(p => p._id);
-            query.projectId = { $in: projectIds };
+        // PM / Foreman / Worker Visibility Logic
+        if (['PM', 'FOREMAN', 'WORKER'].includes(req.user.role)) {
+            const Job = require('../models/Job');
+            const jobFilter = { companyId: req.user.companyId };
+
+            if (req.user.role === 'PM') {
+                jobFilter.$or = [
+                    { foremanId: req.user._id },
+                    { createdBy: req.user._id }
+                ];
+            } else if (req.user.role === 'FOREMAN') {
+                jobFilter.foremanId = req.user._id;
+            } else {
+                jobFilter.assignedWorkers = req.user._id;
+            }
+
+            const assignedJobs = await Job.find(jobFilter).select('projectId');
+            const jobProjectIds = assignedJobs
+                .filter(j => j.projectId)
+                .map(j => j.projectId.toString());
+
+            if (req.user.role === 'PM') {
+                const Project = require('../models/Project');
+                const directProjects = await Project.find({
+                    companyId: req.user.companyId,
+                    $or: [
+                        { pmId: req.user._id },
+                        { createdBy: req.user._id }
+                    ]
+                }).select('_id');
+                const directProjectIds = directProjects.map(p => p._id.toString());
+                const allProjectIds = [...new Set([...jobProjectIds, ...directProjectIds])];
+                query.projectId = { $in: allProjectIds };
+            } else {
+                query.projectId = { $in: jobProjectIds };
+            }
         }
 
         if (req.query.projectId) {
-            // If projectId is provided, ensure it's one of the client's projects
-            if (req.user.role === 'CLIENT') {
-                const clientProjects = await Project.find({ clientId: req.user._id }).select('_id');
-                const projectIds = clientProjects.map(p => p._id.toString());
-                if (!projectIds.includes(req.query.projectId)) {
-                    return res.status(403).json({ message: 'Not authorized to access this project photos' });
+            // Further filter by specific projectId if provided
+            // For security, if they provided one, ensure it's in their allowed list if they are a restricted role
+            if (query.projectId && query.projectId.$in) {
+                if (!query.projectId.$in.includes(req.query.projectId)) {
+                    return res.status(403).json({ message: 'Not authorized for this project' });
                 }
             }
             query.projectId = req.query.projectId;

@@ -7,14 +7,13 @@ const {
     updateTask,
     deleteTask
 } = require('../controllers/taskController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, authorize } = require('../middlewares/authMiddleware');
 
 router.use(protect);
-
 router.get('/', getTasks);
 router.get('/my-tasks', getMyTasks);
-router.post('/', createTask); // Any team member can create tasks usually, or restrict to PM/Foreman
-router.patch('/:id', updateTask);
-router.delete('/:id', deleteTask);
+router.post('/', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'FOREMAN'), createTask);
+router.patch('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'FOREMAN'), updateTask);
+router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), deleteTask);
 
 module.exports = router;

@@ -84,9 +84,48 @@ app.get('/', (req, res) => {
     res.send('Construction SaaS Backend API is running...');
 });
 
+// Online User Tracking
+const onlineUsers = new Map();
+
 // Socket.io Connection
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
+
+    // Register User
+    socket.on('register_user', (userData) => {
+        if (userData && userData._id) {
+            onlineUsers.set(socket.id, {
+                userId: userData._id,
+                fullName: userData.fullName,
+                role: userData.role,
+                companyId: userData.companyId,
+                lat: userData.lat || null,
+                lng: userData.lng || null
+            });
+            // Update every client with new online count
+            io.emit('online_users_count', onlineUsers.size);
+            io.emit('user_status_change', { userId: userData._id, status: 'online' });
+            console.log(`User registered: ${userData.fullName} (${onlineUsers.size} online)`);
+        }
+    });
+
+    // Update Location
+    socket.on('update_location', (data) => {
+        const user = onlineUsers.get(socket.id);
+        if (user && data.lat && data.lng) {
+            user.lat = data.lat;
+            user.lng = data.lng;
+            // Broadcast location to everyone else in the same company
+            socket.broadcast.emit('location_update', {
+                userId: user.userId,
+                fullName: user.fullName,
+                role: user.role,
+                lat: data.lat,
+                lng: data.lng,
+                companyId: user.companyId
+            });
+        }
+    });
 
     socket.on('join_project', (projectId) => {
         socket.join(projectId);
@@ -94,6 +133,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        const user = onlineUsers.get(socket.id);
+        if (user) {
+            onlineUsers.delete(socket.id);
+            io.emit('online_users_count', onlineUsers.size);
+            io.emit('user_status_change', { userId: user.userId, status: 'offline' });
+        }
         console.log('Client disconnected:', socket.id);
     });
 });

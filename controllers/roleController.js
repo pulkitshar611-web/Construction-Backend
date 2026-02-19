@@ -59,6 +59,12 @@ const updateRolePermissions = async (req, res, next) => {
             });
         }
 
+        // Emit socket event to notify clients
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('permissions_updated', { role: roleName });
+        }
+
         res.json(rolePerm);
     } catch (error) {
         next(error);

@@ -7,6 +7,7 @@ const getIssues = async (req, res, next) => {
     try {
         const query = { companyId: req.user.companyId };
         if (req.query.projectId) query.projectId = req.query.projectId;
+        if (req.query.jobId) query.jobId = req.query.jobId;
         if (req.query.status) query.status = req.query.status;
 
         const issues = await Issue.find(query)

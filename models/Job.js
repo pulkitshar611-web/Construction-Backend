@@ -33,6 +33,10 @@ const jobSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    assignedWorkers: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
     status: {
         type: String,
         enum: ['planning', 'active', 'on-hold', 'completed'],

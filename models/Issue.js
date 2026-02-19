@@ -11,6 +11,10 @@ const issueSchema = new mongoose.Schema({
         ref: 'Project',
         required: true
     },
+    jobId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Job'
+    },
     title: {
         type: String,
         required: true
@@ -25,7 +29,7 @@ const issueSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['open', 'in_review', 'resolved', 'closed'],
+        enum: ['open', 'in_progress', 'fixed', 'closed'],
         default: 'open'
     },
     assignedTo: {
@@ -40,8 +44,8 @@ const issueSchema = new mongoose.Schema({
     dueDate: Date,
     category: {
         type: String,
-        enum: ['safety', 'quality', 'technical', 'financial', 'schedule', 'other'],
-        default: 'technical'
+        enum: ['safety', 'quality', 'work', 'material', 'other'],
+        default: 'work'
     },
     photoIds: [{
         type: mongoose.Schema.Types.ObjectId,

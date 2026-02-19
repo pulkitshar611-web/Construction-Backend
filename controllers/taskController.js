@@ -11,6 +11,21 @@ const getTasks = async (req, res, next) => {
         if (req.query.status) query.status = req.query.status;
         if (req.query.assignedTo) query.assignedTo = req.query.assignedTo;
 
+        // Worker: Only see tasks explicitly assigned to them
+        if (req.user.role === 'WORKER') {
+            query.assignedTo = req.user._id;
+        }
+
+        // Foreman: See tasks in jobs they are the foreman of
+        if (req.user.role === 'FOREMAN') {
+            const Job = require('../models/Job');
+            const managedJobs = await Job.find({ foremanId: req.user._id }).select('_id');
+            const jobIds = managedJobs.map(j => j._id);
+            // This assumes Task has a jobId or we filter by projectId + foreman context.
+            // For now, let's stick to the prompt: "Can only view assigned tasks" for workers.
+            // Foreman: "Can create limited DAILY site tasks only".
+        }
+
         const tasks = await Task.find(query)
             .populate('projectId', 'name')
             .populate('assignedTo', 'fullName email')

@@ -3,6 +3,9 @@ const Task = require('../models/Task');
 const TimeLog = require('../models/TimeLog');
 const Invoice = require('../models/Invoice');
 const Issue = require('../models/Issue');
+const User = require('../models/User');
+const PurchaseOrder = require('../models/PurchaseOrder');
+const DailyLog = require('../models/DailyLog');
 
 // @desc    Get project overview report
 // @route   GET /api/reports/project/:projectId
@@ -184,4 +187,206 @@ const getCompanyReport = async (req, res, next) => {
         next(error);
     }
 };
-module.exports = { getProjectReport, getCompanyReport };
+const getDashboardStats = async (req, res, next) => {
+    try {
+        const companyId = req.user.companyId;
+        const userId = req.user._id;
+        const role = req.user.role;
+
+        const stats = {};
+
+        // Shared / Base Metrics
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        if (['COMPANY_OWNER', 'PM', 'FOREMAN'].includes(role)) {
+            // Define filters
+            const projectFilter = { companyId, status: { $in: ['active', 'planning'] } };
+            const jobFilter = { companyId };
+            const timeLogFilter = { companyId };
+            const poFilter = { companyId, status: { $ne: 'received' } };
+            const dailyLogFilter = { companyId };
+
+            if (role === 'PM') {
+                const Job = require('../models/Job');
+                // Find projects where PM is direct pmId OR creator
+                const directProjects = await Project.find({
+                    companyId,
+                    $or: [{ pmId: userId }, { createdBy: userId }]
+                }).select('_id');
+
+                // Find projects where PM is assigned to a job OR created a job
+                const jobProjects = await Job.find({
+                    $or: [{ foremanId: userId }, { createdBy: userId }]
+                }).select('projectId');
+
+                const allProjectIds = [...new Set([
+                    ...directProjects.map(p => p._id.toString()),
+                    ...jobProjects.filter(j => j.projectId).map(j => j.projectId.toString())
+                ])];
+
+                projectFilter._id = { $in: allProjectIds };
+                delete projectFilter.status; // PM should see all their projects' stats? 
+                // Actually keep status filter if we only want active/planning in the count
+                projectFilter.status = { $in: ['active', 'planning'] };
+
+                // jobFilter should also include jobs they created directly
+                jobFilter.$or = [
+                    { projectId: { $in: allProjectIds } },
+                    { createdBy: userId },
+                    { foremanId: userId }
+                ];
+
+                timeLogFilter.projectId = { $in: allProjectIds };
+                poFilter.projectId = { $in: allProjectIds };
+                dailyLogFilter.projectId = { $in: allProjectIds };
+            } else if (role === 'FOREMAN') {
+                const Job = require('../models/Job');
+                const managedJobs = await Job.find({ foremanId: userId }).select('_id projectId');
+                const jobIds = managedJobs.map(j => j._id);
+                const projectIds = managedJobs.map(j => j.projectId);
+
+                projectFilter._id = { $in: projectIds };
+                jobFilter._id = { $in: jobIds };
+                timeLogFilter.projectId = { $in: projectIds }; // Or more specific to job
+                poFilter.projectId = { $in: projectIds };
+                dailyLogFilter.projectId = { $in: projectIds };
+            }
+
+            const [activeJobsCount, crewOnSiteCount, totalCrew, pos, pendingLogs, recentActivity, recentLogs] = await Promise.all([
+                Project.countDocuments(projectFilter),
+                TimeLog.countDocuments({ ...timeLogFilter, clockOut: null }),
+                User.countDocuments({ companyId, role: { $in: ['WORKER', 'FOREMAN', 'PM'] } }),
+                PurchaseOrder.find(poFilter),
+                TimeLog.countDocuments({ ...timeLogFilter, status: 'pending' }),
+                TimeLog.find(timeLogFilter)
+                    .sort({ clockIn: -1 })
+                    .limit(5)
+                    .populate('userId', 'fullName avatar')
+                    .populate({
+                        path: 'projectId',
+                        select: 'name pmId',
+                        populate: { path: 'pmId', select: 'fullName' }
+                    }),
+                DailyLog.find(dailyLogFilter)
+                    .sort({ date: -1 })
+                    .limit(3)
+                    .populate('reportedBy', 'fullName')
+                    .populate({
+                        path: 'projectId',
+                        select: 'name pmId',
+                        populate: { path: 'pmId', select: 'fullName' }
+                    })
+            ]);
+
+            // Calculate hours today
+            const logsToday = await TimeLog.find({ ...timeLogFilter, clockIn: { $gte: today } });
+            const hoursToday = logsToday.reduce((acc, log) => {
+                const end = log.clockOut || new Date();
+                return acc + (end - new Date(log.clockIn)) / (1000 * 60 * 60);
+            }, 0);
+
+            stats.metrics = {
+                activeJobs: activeJobsCount,
+                crewOnSiteCount,
+                totalCrew,
+                hoursToday: Math.round(hoursToday),
+                equipmentRunning: 0,
+                openPos: pos.length,
+                openPosValue: pos.reduce((acc, p) => acc + (p.totalAmount || 0), 0),
+                pendingApprovals: pendingLogs
+            };
+
+            stats.crewActivity = recentActivity.map(log => ({
+                name: log.userId?.fullName || 'Unknown',
+                job: log.projectId?.name || 'No Project',
+                time: new Date(log.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                status: log.clockOut ? 'Clocked Out' : 'On Site',
+                subtext: log.clockOut ? `${Math.round((new Date(log.clockOut) - new Date(log.clockIn)) / (1000 * 60 * 60))}h total` : null,
+                avatar: log.userId?.fullName?.split(' ').map(n => n[0]).join('') || '??'
+            }));
+
+            stats.recentDailyLogs = recentLogs.map(log => ({
+                job: log.projectId?.name || '---',
+                date: new Date(log.date).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
+                foreman: log.reportedBy?.fullName || '---'
+            }));
+        }
+
+        if (role === 'WORKER') {
+            const myLogsToday = await TimeLog.find({ userId, clockIn: { $gte: today } });
+            const myHoursToday = myLogsToday.reduce((acc, log) => {
+                const end = log.clockOut || new Date();
+                return acc + (end - new Date(log.clockIn)) / (1000 * 60 * 60);
+            }, 0);
+
+            const activeLog = await TimeLog.findOne({ userId, clockOut: null }).populate('projectId', 'name');
+
+            // Weekly hours
+            const startOfWeek = new Date();
+            startOfWeek.setDate(today.getDate() - today.getDay());
+            const myWeeklyLogs = await TimeLog.find({ userId, clockIn: { $gte: startOfWeek } });
+            const totalWeeklyHours = myWeeklyLogs.reduce((acc, log) => {
+                const end = log.clockOut || new Date();
+                return acc + (end - new Date(log.clockIn)) / (1000 * 60 * 60);
+            }, 0);
+
+            stats.workerMetrics = {
+                myHoursToday: myHoursToday.toFixed(1) + 'h',
+                currentJob: activeLog?.projectId?.name || 'Not Clocked In',
+                weeklyTarget: '40h',
+                weeklyDone: Math.round(totalWeeklyHours) + 'h done',
+                isClockedIn: !!activeLog,
+                timer: activeLog ? Math.floor((new Date() - new Date(activeLog.clockIn)) / 1000) : 0
+            };
+
+            const myRecentActivity = await TimeLog.find({ userId })
+                .sort({ clockIn: -1 })
+                .limit(5)
+                .populate('projectId', 'name');
+
+            stats.myRecentActivity = myRecentActivity.map(log => ({
+                id: log._id,
+                action: log.clockOut ? 'Clocked Out' : 'Clocked In',
+                job: log.projectId?.name || '---',
+                time: new Date(log.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                date: new Date(log.clockIn).toDateString() === new Date().toDateString() ? 'Today' :
+                    new Date(log.clockIn).toDateString() === new Date(Date.now() - 86400000).toDateString() ? 'Yesterday' :
+                        new Date(log.clockIn).toLocaleDateString()
+            }));
+        }
+
+        // Productivity Data for Chart (last 7 days)
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const productivity = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const dayName = days[d.getDay()];
+
+            const startOfDay = new Date(d);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(d);
+            endOfDay.setHours(23, 59, 59, 999);
+
+            const logs = await TimeLog.find({
+                companyId,
+                clockIn: { $gte: startOfDay, $lte: endOfDay }
+            });
+
+            const totalHours = logs.reduce((acc, log) => {
+                const end = log.clockOut || (new Date().toDateString() === d.toDateString() ? new Date() : new Date(endOfDay));
+                return acc + Math.max(0, (end - new Date(log.clockIn)) / (1000 * 60 * 60));
+            }, 0);
+
+            productivity.push({ day: dayName, hours: Math.round(totalHours) });
+        }
+        stats.trendData = productivity;
+
+        res.json(stats);
+    } catch (error) {
+        next(error);
+    }
+};
+
+module.exports = { getProjectReport, getCompanyReport, getDashboardStats };
