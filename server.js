@@ -33,6 +33,8 @@ const superAdminRoutes = require('./routes/superAdminRoutes');
 const planRoutes = require('./routes/planRoutes');
 const jobRoutes = require('./routes/jobRoutes');
 const equipmentRoutes = require('./routes/equipmentRoutes');
+const rfiRoutes = require('./routes/rfiRoutes');
+const payrollRoutes = require('./routes/payrollRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -79,6 +81,8 @@ app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/equipment', equipmentRoutes);
+app.use('/api/rfis', rfiRoutes);
+app.use('/api/payroll', payrollRoutes);
 
 // Root Route
 app.get('/', (req, res) => {

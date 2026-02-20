@@ -28,6 +28,14 @@ const userSchema = new mongoose.Schema({
     phone: {
         type: String
     },
+    hourlyRate: {
+        type: Number,
+        default: 30
+    },
+    province: {
+        type: String,
+        default: 'Ontario'
+    },
     isActive: {
         type: Boolean,
         default: true
