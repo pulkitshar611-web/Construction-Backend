@@ -22,17 +22,18 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // @access  Private
 const clockIn = async (req, res, next) => {
     try {
-        const { projectId, latitude, longitude, deviceInfo } = req.body;
+        const { projectId, latitude, longitude, deviceInfo, userId } = req.body;
+        const targetUserId = userId || req.user._id;
 
         // Check if already clocked in
         const activeLog = await TimeLog.findOne({
-            userId: req.user._id,
+            userId: targetUserId,
             clockOut: null
         });
 
         if (activeLog) {
             res.status(400);
-            throw new Error('Already clocked in');
+            throw new Error('User already clocked in');
         }
 
         let geofenceStatus = 'unknown';
@@ -50,7 +51,7 @@ const clockIn = async (req, res, next) => {
 
         const log = await TimeLog.create({
             companyId: req.user.companyId,
-            userId: req.user._id,
+            userId: targetUserId,
             projectId,
             clockIn: new Date(),
             gpsIn: { latitude, longitude },
@@ -69,16 +70,17 @@ const clockIn = async (req, res, next) => {
 // @access  Private
 const clockOut = async (req, res, next) => {
     try {
-        const { latitude, longitude } = req.body;
+        const { latitude, longitude, userId } = req.body;
+        const targetUserId = userId || req.user._id;
 
         const log = await TimeLog.findOne({
-            userId: req.user._id,
+            userId: targetUserId,
             clockOut: null
         });
 
         if (!log) {
             res.status(400);
-            throw new Error('Not clocked in');
+            throw new Error('User not clocked in');
         }
 
         log.clockOut = new Date();
