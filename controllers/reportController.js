@@ -242,7 +242,9 @@ const getDashboardStats = async (req, res, next) => {
                 dailyLogFilter.projectId = { $in: allProjectIds };
             } else if (['FOREMAN', 'SUBCONTRACTOR'].includes(role)) {
                 const Job = require('../models/Job');
-                const managedJobs = await Job.find({ foremanId: userId }).select('_id projectId');
+                const managedJobs = await Job.find({
+                    $or: [{ foremanId: userId }, { assignedWorkers: userId }]
+                }).select('_id projectId');
                 const jobIds = managedJobs.map(j => j._id);
                 const projectIds = managedJobs.map(j => j.projectId);
 
@@ -304,6 +306,12 @@ const getDashboardStats = async (req, res, next) => {
                 status: log.clockOut ? 'Clocked Out' : 'On Site',
                 subtext: log.clockOut ? `${Math.round((new Date(log.clockOut) - new Date(log.clockIn)) / (1000 * 60 * 60))}h total` : null,
                 avatar: log.userId?.fullName?.split(' ').map(n => n[0]).join('') || '??'
+            }));
+
+            stats.myJobs = managedJobs.map(j => ({
+                id: j._id,
+                name: j.name,
+                projectId: j.projectId
             }));
 
             stats.recentDailyLogs = recentLogs.map(log => ({

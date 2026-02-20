@@ -8,15 +8,19 @@ const DEFAULT_PERMISSIONS = {
     'WORKER': ['VIEW_DASHBOARD', 'VIEW_MY_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'ACCESS_CHAT'],
     'ENGINEER': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_DRAWINGS', 'MANAGE_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'ACCESS_CHAT'],
     'CLIENT': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'VIEW_INVOICES'],
-    'SUBCONTRACTOR': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_SCHEDULE', 'VIEW_MY_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_DAILY_LOGS', 'VIEW_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'VIEW_EQUIPMENT', 'VIEW_RFI']
+    'SUBCONTRACTOR': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_MY_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_DAILY_LOGS', 'VIEW_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'VIEW_EQUIPMENT', 'VIEW_RFI']
 };
 
 // Internal helper to ensure roles are seeded
 const seedRoles = async () => {
     for (const [role, perms] of Object.entries(DEFAULT_PERMISSIONS)) {
-        const exists = await RolePermission.findOne({ role });
-        if (!exists) {
+        const roleDoc = await RolePermission.findOne({ role });
+        if (!roleDoc) {
             await RolePermission.create({ role, permissions: perms });
+        } else {
+            // Update permissions if they've changed in the code
+            roleDoc.permissions = perms;
+            await roleDoc.save();
         }
     }
 };
