@@ -59,6 +59,16 @@ const clockIn = async (req, res, next) => {
             deviceInfo
         });
 
+        // Emit socket event for real-time updates
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('attendance_update', {
+                type: 'clock-in',
+                userId: targetUserId,
+                log: await TimeLog.findById(log._id).populate('userId', 'fullName role avatar').populate('projectId', 'name')
+            });
+        }
+
         res.status(201).json(log);
     } catch (error) {
         next(error);
@@ -86,6 +96,16 @@ const clockOut = async (req, res, next) => {
         log.clockOut = new Date();
         log.gpsOut = { latitude, longitude };
         await log.save();
+
+        // Emit socket event for real-time updates
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('attendance_update', {
+                type: 'clock-out',
+                userId: targetUserId,
+                logId: log._id
+            });
+        }
 
         res.json(log);
     } catch (error) {
