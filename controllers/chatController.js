@@ -29,40 +29,80 @@ const getProjectChat = async (req, res, next) => {
     }
 };
 
+// @desc    Get private chat history between users
+// @route   GET /api/chat/private/:userId
+// @access  Private
+const getPrivateChat = async (req, res, next) => {
+    try {
+        const otherUserId = req.params.userId;
+        const chats = await Chat.find({
+            companyId: req.user.companyId,
+            $or: [
+                { sender: req.user._id, receiverId: otherUserId },
+                { sender: otherUserId, receiverId: req.user._id }
+            ]
+        }).populate('sender', 'fullName role');
+
+        res.json(chats);
+    } catch (error) {
+        next(error);
+    }
+};
+
 // @desc    Send message (Handled by Socket.io, but this is the REST fallback or persistence)
 // @route   POST /api/chat
 // @access  Private
 const sendMessage = async (req, res, next) => {
     try {
-        const { projectId, message, attachments } = req.body;
+        const { projectId, receiverId, message, attachments } = req.body;
 
-        const project = await Project.findById(projectId);
-        if (!project) {
-            res.status(404);
-            throw new Error('Project not found');
+        if (!projectId && !receiverId) {
+            res.status(400);
+            throw new Error('Project ID or Receiver ID is required');
         }
 
-        // Security check for Clients
-        if (req.user.role === 'CLIENT' && project.clientId?.toString() !== req.user._id.toString()) {
-            res.status(403);
-            throw new Error('Not authorized to send messages to this project chat');
-        }
-
-        const chat = await Chat.create({
+        let chatData = {
             companyId: req.user.companyId,
-            projectId,
             sender: req.user._id,
             message,
             attachments
-        });
+        };
+
+        if (projectId) {
+            const project = await Project.findById(projectId);
+            if (!project) {
+                res.status(404);
+                throw new Error('Project not found');
+            }
+            if (req.user.role === 'CLIENT' && project.clientId?.toString() !== req.user._id.toString()) {
+                res.status(403);
+                throw new Error('Not authorized to send messages to this project chat');
+            }
+            chatData.projectId = projectId;
+        } else {
+            chatData.receiverId = receiverId;
+        }
+
+        const chat = await Chat.create(chatData);
+
+        // Final chat object for emission
+        const fullChat = await Chat.findById(chat._id).populate('sender', 'fullName role');
 
         // Emit via Socket.io if available
         const io = req.app.get('io');
         if (io) {
-            io.to(projectId).emit('new_message', chat);
+            if (projectId) {
+                // Emit to project room
+                io.to(projectId).emit('new_message', fullChat);
+            } else {
+                // Emit to receiver's personal room
+                io.to(receiverId).emit('new_message', fullChat);
+                // Also emit to sender (for multi-device sync)
+                io.to(req.user._id.toString()).emit('new_message', fullChat);
+            }
         }
 
-        res.status(201).json(chat);
+        res.status(201).json(fullChat);
     } catch (error) {
         next(error);
     }
@@ -70,5 +110,6 @@ const sendMessage = async (req, res, next) => {
 
 module.exports = {
     getProjectChat,
+    getPrivateChat,
     sendMessage
 };

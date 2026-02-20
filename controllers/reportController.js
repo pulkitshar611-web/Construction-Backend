@@ -199,7 +199,7 @@ const getDashboardStats = async (req, res, next) => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        if (['COMPANY_OWNER', 'PM', 'FOREMAN'].includes(role)) {
+        if (['COMPANY_OWNER', 'PM', 'FOREMAN', 'SUBCONTRACTOR'].includes(role)) {
             // Define filters
             const projectFilter = { companyId, status: { $in: ['active', 'planning'] } };
             const jobFilter = { companyId };
@@ -240,7 +240,7 @@ const getDashboardStats = async (req, res, next) => {
                 timeLogFilter.projectId = { $in: allProjectIds };
                 poFilter.projectId = { $in: allProjectIds };
                 dailyLogFilter.projectId = { $in: allProjectIds };
-            } else if (role === 'FOREMAN') {
+            } else if (['FOREMAN', 'SUBCONTRACTOR'].includes(role)) {
                 const Job = require('../models/Job');
                 const managedJobs = await Job.find({ foremanId: userId }).select('_id projectId');
                 const jobIds = managedJobs.map(j => j._id);
@@ -313,7 +313,7 @@ const getDashboardStats = async (req, res, next) => {
             }));
         }
 
-        if (role === 'WORKER') {
+        if (['WORKER', 'SUBCONTRACTOR'].includes(role)) {
             const myLogsToday = await TimeLog.find({ userId, clockIn: { $gte: today } });
             const myHoursToday = myLogsToday.reduce((acc, log) => {
                 const end = log.clockOut || new Date();
