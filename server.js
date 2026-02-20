@@ -45,8 +45,7 @@ const io = new Server(server, {
     }
 });
 
-// Connect to Database
-connectDB();
+// Connect to Database handled at bottom of file
 
 // Middleware
 app.use(helmet());
@@ -153,6 +152,12 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 8080;
 
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+// Connect to Database and Start Server
+connectDB().then(() => {
+    server.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
+}).catch(err => {
+    console.error('Failed to connect to MongoDB', err);
+    process.exit(1);
 });

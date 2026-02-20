@@ -7,6 +7,7 @@ const User = require('../models/User');
 // @access  Private
 const getProjects = async (req, res, next) => {
     try {
+        console.log('GET /api/projects - start', req.user.role);
         // Multi-tenant check: Filter by companyId
         const query = { companyId: req.user.companyId };
 
@@ -17,6 +18,7 @@ const getProjects = async (req, res, next) => {
 
         // PM / Foreman / Worker Visibility Logic
         if (['PM', 'FOREMAN', 'WORKER'].includes(req.user.role)) {
+            console.log('GET /api/projects - filtered visibility check');
             const Job = require('../models/Job');
             const jobFilter = { companyId: req.user.companyId };
 
@@ -31,7 +33,9 @@ const getProjects = async (req, res, next) => {
                 jobFilter.assignedWorkers = req.user._id;
             }
 
+            console.log('GET /api/projects - finding jobs with filter', jobFilter);
             const assignedJobs = await Job.find(jobFilter).select('projectId');
+            console.log('GET /api/projects - jobs found', assignedJobs.length);
             // Ensure we handle cases where projectId might be missing or invalid
             const jobProjectIds = assignedJobs
                 .filter(j => j.projectId)
@@ -39,6 +43,7 @@ const getProjects = async (req, res, next) => {
 
             if (req.user.role === 'PM') {
                 // For PMs, also include projects they are directly assigned to or created
+                console.log('GET /api/projects - finding direct projects for PM');
                 const directProjects = await Project.find({
                     companyId: req.user.companyId,
                     $or: [
@@ -64,12 +69,15 @@ const getProjects = async (req, res, next) => {
             query.clientId = req.user._id;
         }
 
+        console.log('GET /api/projects - final query', query);
         const projects = await Project.find(query)
             .populate('clientId', 'fullName email')
             .populate('createdBy', 'fullName')
             .populate('pmId', 'fullName email');
+        console.log('GET /api/projects - success', projects.length);
         res.json(projects);
     } catch (error) {
+        console.error('GET /api/projects - error', error);
         next(error);
     }
 };
