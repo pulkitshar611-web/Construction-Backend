@@ -37,7 +37,7 @@ const authorize = (...roles) => {
     return (req, res, next) => {
         if (!roles.includes(req.user.role)) {
             res.status(403);
-            throw new Error(`User role ${req.user.role} is not authorized to access this route`);
+            return next(new Error(`User role ${req.user.role} is not authorized to access this route`));
         }
         next();
     };
@@ -48,9 +48,11 @@ const checkPermission = (permission) => {
         const RolePermission = require('../models/RolePermission');
         const rolePerm = await RolePermission.findOne({ role: req.user.role });
 
-        if (!rolePerm || !rolePerm.permissions.includes(permission)) {
+        if (req.user.role === 'SUPER_ADMIN') return next();
+
+        if (!rolePerm || (!rolePerm.permissions.includes(permission) && !rolePerm.permissions.includes('ALL'))) {
             res.status(403);
-            throw new Error(`Permission denied: ${permission} required`);
+            return next(new Error(`Permission denied: ${permission} required`));
         }
         next();
     };
