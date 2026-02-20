@@ -103,6 +103,9 @@ io.on('connection', (socket) => {
                 lat: userData.lat || null,
                 lng: userData.lng || null
             });
+            // Join personal room for private messages
+            socket.join(userData._id);
+
             // Update every client with new online count
             io.emit('online_users_count', onlineUsers.size);
             io.emit('user_status_change', { userId: userData._id, status: 'online' });
