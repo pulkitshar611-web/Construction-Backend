@@ -96,11 +96,25 @@ const getJobById = async (req, res) => {
 // POST /jobs
 const createJob = async (req, res) => {
     try {
+        const { equipmentIds, ...jobData } = req.body;
         const job = await Job.create({
-            ...req.body,
+            ...jobData,
             companyId: req.user.companyId,
             createdBy: req.user._id
         });
+
+        // If equipmentIds are provided, assign them to the new job
+        if (equipmentIds && Array.isArray(equipmentIds)) {
+            const Equipment = require('../models/Equipment');
+            await Equipment.updateMany(
+                { _id: { $in: equipmentIds }, companyId: req.user.companyId },
+                {
+                    assignedJob: job._id,
+                    assignedDate: new Date(),
+                    status: 'operational'
+                }
+            );
+        }
 
         // Sync project stats
         await updateProjectStats(job.projectId);
