@@ -5,7 +5,7 @@ const Project = require('../models/Project');
 const Issue = require('../models/Issue');
 const Invoice = require('../models/Invoice');
 const Photo = require('../models/Photo');
-const PurchaseOrder = require('../models/PurchaseOrder');
+const PurchaseOrder = require('../models/purchaseOrder.model');
 const TimeLog = require('../models/TimeLog');
 
 // @desc    Get dashboard statistics for a company

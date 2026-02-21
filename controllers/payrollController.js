@@ -148,8 +148,62 @@ const getPayrollHistory = async (req, res, next) => {
     }
 };
 
+// @desc    Get contributing TimeLogs for a single employee in a period (for detail modal)
+// @route   GET /api/payroll/details?userId=&startDate=&endDate=
+const getPayrollDetails = async (req, res, next) => {
+    try {
+        const { userId, startDate, endDate } = req.query;
+        const companyId = req.user.companyId;
+
+        const logs = await TimeLog.find({
+            companyId,
+            userId,
+            status: 'approved',
+            clockIn: { $gte: new Date(startDate) },
+            clockOut: { $lte: new Date(endDate), $ne: null }
+        })
+            .populate('userId', 'fullName role hourlyRate')
+            .populate('jobId', 'title')
+            .sort({ clockIn: 1 });
+
+        const enriched = logs.map(log => {
+            const hours = (new Date(log.clockOut) - new Date(log.clockIn)) / 3600000;
+            return {
+                _id: log._id,
+                date: log.clockIn,
+                clockIn: log.clockIn,
+                clockOut: log.clockOut,
+                hours: Number(hours.toFixed(2)),
+                job: log.jobId?.title || 'General',
+                rate: log.userId?.hourlyRate || 30,
+                amount: Number((hours * (log.userId?.hourlyRate || 30)).toFixed(2))
+            };
+        });
+
+        res.json(enriched);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get a single saved payroll slip
+// @route   GET /api/payroll/slip/:id
+const getPayrollSlip = async (req, res, next) => {
+    try {
+        const record = await Payroll.findById(req.params.id)
+            .populate('employeeId', 'fullName role email hourlyRate');
+        if (!record) return res.status(404).json({ message: 'Payroll record not found' });
+        res.json(record);
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getPayrollPreview,
     runPayroll,
-    getPayrollHistory
+    getPayrollHistory,
+    getPayrollDetails,
+    getPayrollSlip
 };
+

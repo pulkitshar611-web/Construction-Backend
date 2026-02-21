@@ -24,7 +24,7 @@ const issueRoutes = require('./routes/issueRoutes');
 const dailyLogRoutes = require('./routes/dailyLogRoutes');
 const estimateRoutes = require('./routes/estimateRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
-const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
+const purchaseOrderRoutes = require('./routes/purchaseOrder.routes');
 const chatRoutes = require('./routes/chatRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const reportRoutes = require('./routes/reportRoutes');
@@ -35,6 +35,7 @@ const jobRoutes = require('./routes/jobRoutes');
 const equipmentRoutes = require('./routes/equipmentRoutes');
 const rfiRoutes = require('./routes/rfiRoutes');
 const payrollRoutes = require('./routes/payrollRoutes');
+const vendorRoutes = require('./routes/vendorRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -83,6 +84,7 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api/rfis', rfiRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/vendors', vendorRoutes);
 
 // Root Route
 app.get('/', (req, res) => {

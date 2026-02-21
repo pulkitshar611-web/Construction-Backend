@@ -4,7 +4,7 @@ const TimeLog = require('../models/TimeLog');
 const Invoice = require('../models/Invoice');
 const Issue = require('../models/Issue');
 const User = require('../models/User');
-const PurchaseOrder = require('../models/PurchaseOrder');
+const PurchaseOrder = require('../models/purchaseOrder.model');
 const DailyLog = require('../models/DailyLog');
 
 // @desc    Get project overview report
@@ -204,7 +204,8 @@ const getDashboardStats = async (req, res, next) => {
             const projectFilter = { companyId, status: { $in: ['active', 'planning'] } };
             const jobFilter = { companyId };
             const timeLogFilter = { companyId };
-            const poFilter = { companyId, status: { $ne: 'received' } };
+            const poFilter = { companyId, status: { $in: ['Draft', 'Pending Approval', 'Approved', 'Sent', 'Delivered'] } };
+            const pendingPOFilter = { companyId, status: 'Pending Approval' };
             const dailyLogFilter = { companyId };
 
             if (role === 'PM') {
@@ -255,11 +256,12 @@ const getDashboardStats = async (req, res, next) => {
                 dailyLogFilter.projectId = { $in: projectIds };
             }
 
-            const [activeJobsCount, crewOnSiteCount, totalCrew, pos, pendingLogs, recentActivity, recentLogs] = await Promise.all([
+            const [activeJobsCount, crewOnSiteCount, totalCrew, pos, pendingPOsCount, pendingLogs, recentActivity, recentLogs] = await Promise.all([
                 Project.countDocuments(projectFilter),
                 TimeLog.countDocuments({ ...timeLogFilter, clockOut: null }),
                 User.countDocuments({ companyId, role: { $in: ['WORKER', 'FOREMAN', 'PM'] } }),
                 PurchaseOrder.find(poFilter),
+                PurchaseOrder.countDocuments(pendingPOFilter),
                 TimeLog.countDocuments({ ...timeLogFilter, status: 'pending' }),
                 TimeLog.find(timeLogFilter)
                     .sort({ clockIn: -1 })
@@ -296,7 +298,7 @@ const getDashboardStats = async (req, res, next) => {
                 equipmentRunning: 0,
                 openPos: pos.length,
                 openPosValue: pos.reduce((acc, p) => acc + (p.totalAmount || 0), 0),
-                pendingApprovals: pendingLogs
+                pendingApprovals: pendingLogs + pendingPOsCount // Unified count for UI
             };
 
             stats.crewActivity = recentActivity.map(log => ({
