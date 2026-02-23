@@ -82,13 +82,14 @@ const getCompanyReport = async (req, res, next) => {
 
         // Projects
         const totalProjects = await Project.countDocuments({ companyId });
-        const activeProjects = await Project.countDocuments({ companyId, status: 'in_progress' });
-        const completedProjects = await Project.countDocuments({ companyId, status: 'completed' });
-        const atRiskProjects = await Project.countDocuments({ companyId, status: 'on_hold' }); // Using on_hold as proxy for risk for now
+        const preConstruction = await Project.countDocuments({ companyId, status: 'planning' });
+        const activeSites = await Project.countDocuments({ companyId, status: 'active' });
+        const onHold = await Project.countDocuments({ companyId, status: 'on_hold' });
+        const handedOver = await Project.countDocuments({ companyId, status: 'completed' });
 
-        // Tasks & Productivity
-        const totalTasks = await Task.countDocuments({ companyId });
-        const completedTasks = await Task.countDocuments({ companyId, status: 'completed' });
+        // Jobs
+        const totalJobs = await Job.countDocuments({ companyId });
+        const completedJobs = await Job.countDocuments({ companyId, status: 'completed' });
 
         // Labor Hours (from TimeLogs)
         const timeLogs = await TimeLog.find({ companyId });
@@ -163,6 +164,10 @@ const getCompanyReport = async (req, res, next) => {
         }
 
 
+        // Equipment Stats
+        const totalEquipment = await Equipment.countDocuments({ companyId });
+        const operationalEquipment = await Equipment.countDocuments({ companyId, status: 'operational' });
+
         res.json({
             financials: {
                 totalRevenue: totalPaid, // Assuming paid invoices = revenue
@@ -172,9 +177,10 @@ const getCompanyReport = async (req, res, next) => {
             },
             projects: {
                 total: totalProjects,
-                active: activeProjects,
-                completed: completedProjects,
-                atRisk: atRiskProjects
+                preConstruction,
+                activeSites,
+                onHold,
+                handedOver
             },
             labor: {
                 totalHours: Math.round(totalLaborHours),
@@ -183,6 +189,14 @@ const getCompanyReport = async (req, res, next) => {
             safety: {
                 totalIncidents: safetyIncidentsCount,
                 daysIncidentFree
+            },
+            equipment: {
+                total: totalEquipment,
+                operational: operationalEquipment
+            },
+            jobs: {
+                total: totalJobs,
+                completed: completedJobs
             }
         });
 

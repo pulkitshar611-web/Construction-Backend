@@ -103,7 +103,8 @@ const assignEquipment = async (req, res, next) => {
         equipment.assignedDate = assignedNow;
         equipment.status = 'operational';
 
-        // Push to history
+        // Push to history — initialize array if missing (old documents pre-schema change)
+        if (!equipment.assignmentHistory) equipment.assignmentHistory = [];
         equipment.assignmentHistory.push({
             jobId,
             jobName,
@@ -140,6 +141,8 @@ const returnEquipment = async (req, res, next) => {
         }
 
         // Stamp returnedDate on the latest open history record
+        // Guard: initialize if old document doesn't have the field
+        if (!equipment.assignmentHistory) equipment.assignmentHistory = [];
         const openRecord = [...equipment.assignmentHistory].reverse().find(h => !h.returnedDate);
         if (openRecord) {
             openRecord.returnedDate = new Date();
