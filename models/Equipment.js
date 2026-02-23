@@ -43,6 +43,10 @@ const equipmentSchema = new mongoose.Schema({
     notes: {
         type: String,
         default: ''
+    },
+    imageUrl: {
+        type: String,
+        default: ''
     }
 }, {
     timestamps: true

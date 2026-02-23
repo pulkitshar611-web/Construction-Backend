@@ -1,5 +1,6 @@
 const Equipment = require('../models/Equipment');
 const Job = require('../models/Job');
+const cloudinary = require('cloudinary').v2;
 
 // @desc    Get all equipment for the company
 // @route   GET /api/equipment
@@ -134,11 +135,38 @@ const returnEquipment = async (req, res, next) => {
     }
 };
 
+// @desc    Upload equipment image
+// @route   POST /api/equipment/:id/upload-image
+// @access  Private
+const uploadEquipmentImage = async (req, res, next) => {
+    try {
+        const equipment = await Equipment.findById(req.params.id);
+        if (!equipment || equipment.companyId.toString() !== req.user.companyId.toString()) {
+            res.status(404);
+            throw new Error('Equipment not found');
+        }
+
+        if (!req.file) {
+            res.status(400);
+            throw new Error('No image file provided');
+        }
+
+        // req.file.path is the Cloudinary URL (set by CloudinaryStorage)
+        equipment.imageUrl = req.file.path;
+        await equipment.save();
+
+        res.json({ imageUrl: equipment.imageUrl });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getEquipment,
     createEquipment,
     updateEquipment,
     deleteEquipment,
     assignEquipment,
-    returnEquipment
+    returnEquipment,
+    uploadEquipmentImage
 };

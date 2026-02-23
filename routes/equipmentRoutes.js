@@ -6,9 +6,11 @@ const {
     updateEquipment,
     deleteEquipment,
     assignEquipment,
-    returnEquipment
+    returnEquipment,
+    uploadEquipmentImage
 } = require('../controllers/equipmentController');
 const { protect } = require('../middlewares/authMiddleware');
+const upload = require('../middlewares/uploadMiddleware');
 
 router.use(protect);
 
@@ -22,5 +24,7 @@ router.route('/:id')
 
 router.post('/:id/assign', assignEquipment);
 router.post('/:id/return', returnEquipment);
+router.post('/:id/upload-image', upload.single('image'), uploadEquipmentImage);
 
 module.exports = router;
+
