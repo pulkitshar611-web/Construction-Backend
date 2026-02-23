@@ -7,7 +7,14 @@ const Job = require('../models/Job');
 const getEquipment = async (req, res, next) => {
     try {
         const equipment = await Equipment.find({ companyId: req.user.companyId })
-            .populate('assignedJob', 'name status');
+            .populate({
+                path: 'assignedJob',
+                select: 'name status projectId',
+                populate: {
+                    path: 'projectId',
+                    select: 'name'
+                }
+            });
         res.json(equipment);
     } catch (error) {
         next(error);
@@ -41,7 +48,14 @@ const updateEquipment = async (req, res, next) => {
         }
 
         const updated = await Equipment.findByIdAndUpdate(req.params.id, req.body, { new: true })
-            .populate('assignedJob', 'name status');
+            .populate({
+                path: 'assignedJob',
+                select: 'name status projectId',
+                populate: {
+                    path: 'projectId',
+                    select: 'name'
+                }
+            });
         res.json(updated);
     } catch (error) {
         next(error);
@@ -83,7 +97,14 @@ const assignEquipment = async (req, res, next) => {
         equipment.status = 'operational';
 
         await equipment.save();
-        const populated = await Equipment.findById(equipment._id).populate('assignedJob', 'name status');
+        const populated = await Equipment.findById(equipment._id).populate({
+            path: 'assignedJob',
+            select: 'name status projectId',
+            populate: {
+                path: 'projectId',
+                select: 'name'
+            }
+        });
         res.json(populated);
     } catch (error) {
         next(error);

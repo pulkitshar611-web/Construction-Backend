@@ -6,6 +6,9 @@ const Issue = require('../models/Issue');
 const User = require('../models/User');
 const PurchaseOrder = require('../models/purchaseOrder.model');
 const DailyLog = require('../models/DailyLog');
+const Equipment = require('../models/Equipment');
+const RFI = require('../models/RFI');
+const Job = require('../models/Job');
 
 // @desc    Get project overview report
 // @route   GET /api/reports/project/:projectId
@@ -194,10 +197,11 @@ const getDashboardStats = async (req, res, next) => {
         const role = req.user.role;
 
         const stats = {};
-
-        // Shared / Base Metrics
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(today.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
 
         if (['COMPANY_OWNER', 'PM', 'FOREMAN', 'SUBCONTRACTOR'].includes(role)) {
             // Define filters
@@ -209,14 +213,11 @@ const getDashboardStats = async (req, res, next) => {
             const dailyLogFilter = { companyId };
 
             if (role === 'PM') {
-                const Job = require('../models/Job');
-                // Find projects where PM is direct pmId OR creator
                 const directProjects = await Project.find({
                     companyId,
                     $or: [{ pmId: userId }, { createdBy: userId }]
                 }).select('_id');
 
-                // Find projects where PM is assigned to a job OR created a job
                 const jobProjects = await Job.find({
                     $or: [{ foremanId: userId }, { createdBy: userId }]
                 }).select('projectId');
@@ -227,61 +228,43 @@ const getDashboardStats = async (req, res, next) => {
                 ])];
 
                 projectFilter._id = { $in: allProjectIds };
-                delete projectFilter.status; // PM should see all their projects' stats? 
-                // Actually keep status filter if we only want active/planning in the count
                 projectFilter.status = { $in: ['active', 'planning'] };
-
-                // jobFilter should also include jobs they created directly
-                jobFilter.$or = [
-                    { projectId: { $in: allProjectIds } },
-                    { createdBy: userId },
-                    { foremanId: userId }
-                ];
-
+                jobFilter.$or = [{ projectId: { $in: allProjectIds } }, { createdBy: userId }, { foremanId: userId }];
                 timeLogFilter.projectId = { $in: allProjectIds };
                 poFilter.projectId = { $in: allProjectIds };
                 dailyLogFilter.projectId = { $in: allProjectIds };
-            } else if (['FOREMAN', 'SUBCONTRACTOR'].includes(role)) {
-                const Job = require('../models/Job');
-                const managedJobs = await Job.find({
-                    $or: [{ foremanId: userId }, { assignedWorkers: userId }]
-                }).select('_id projectId');
-                const jobIds = managedJobs.map(j => j._id);
-                const projectIds = managedJobs.map(j => j.projectId);
-
-                projectFilter._id = { $in: projectIds };
-                jobFilter._id = { $in: jobIds };
-                timeLogFilter.projectId = { $in: projectIds }; // Or more specific to job
-                poFilter.projectId = { $in: projectIds };
-                dailyLogFilter.projectId = { $in: projectIds };
             }
 
-            const [activeJobsCount, crewOnSiteCount, totalCrew, pos, pendingPOsCount, pendingLogs, recentActivity, recentLogs] = await Promise.all([
+            // Fetch Multi-metrics
+            const [
+                activeJobsCount,
+                crewOnSiteCount,
+                totalCrew,
+                pos,
+                pendingPOsCount,
+                pendingLogs,
+                recentActivity,
+                recentLogs,
+                equipAlerts,
+                overdueRFIs,
+                overdueTasks,
+                offlineSyncs
+            ] = await Promise.all([
                 Project.countDocuments(projectFilter),
                 TimeLog.countDocuments({ ...timeLogFilter, clockOut: null }),
                 User.countDocuments({ companyId, role: { $in: ['WORKER', 'FOREMAN', 'PM'] } }),
                 PurchaseOrder.find(poFilter),
                 PurchaseOrder.countDocuments(pendingPOFilter),
                 TimeLog.countDocuments({ ...timeLogFilter, status: 'pending' }),
-                TimeLog.find(timeLogFilter)
-                    .sort({ clockIn: -1 })
-                    .limit(5)
-                    .populate('userId', 'fullName avatar')
-                    .populate({
-                        path: 'projectId',
-                        select: 'name pmId',
-                        populate: { path: 'pmId', select: 'fullName' }
-                    }),
-                DailyLog.find(dailyLogFilter)
-                    .sort({ date: -1 })
-                    .limit(3)
-                    .populate('reportedBy', 'fullName')
-                    .populate({
-                        path: 'projectId',
-                        select: 'name pmId',
-                        populate: { path: 'pmId', select: 'fullName' }
-                    })
+                TimeLog.find(timeLogFilter).sort({ clockIn: -1 }).limit(5).populate('userId', 'fullName avatar').populate('projectId', 'name'),
+                DailyLog.find(dailyLogFilter).sort({ date: -1 }).limit(3).populate('reportedBy', 'fullName').populate('projectId', 'name'),
+                Equipment.find({ companyId }).populate('assignedJob', 'status'),
+                RFI.countDocuments({ companyId, status: { $ne: 'closed' }, dueDate: { $lt: new Date() } }),
+                Task.countDocuments({ companyId, status: { $ne: 'completed' }, dueDate: { $lt: new Date() } }),
+                TimeLog.countDocuments({ companyId, offlineSync: true, status: 'pending' })
             ]);
+
+            const equipAlertCount = equipAlerts.filter(e => e.assignedJob?.status === 'completed').length;
 
             // Calculate hours today
             const logsToday = await TimeLog.find({ ...timeLogFilter, clockIn: { $gte: today } });
@@ -295,10 +278,14 @@ const getDashboardStats = async (req, res, next) => {
                 crewOnSiteCount,
                 totalCrew,
                 hoursToday: Math.round(hoursToday),
-                equipmentRunning: 0,
+                equipmentRunning: equipAlerts.filter(e => e.status === 'operational').length,
                 openPos: pos.length,
                 openPosValue: pos.reduce((acc, p) => acc + (p.totalAmount || 0), 0),
-                pendingApprovals: pendingLogs + pendingPOsCount // Unified count for UI
+                pendingApprovals: pendingLogs + pendingPOsCount,
+                equipmentAlerts: equipAlertCount,
+                overdueRFIs,
+                overdueTasks,
+                offlineSyncs
             };
 
             stats.crewActivity = recentActivity.map(log => ({
@@ -307,13 +294,9 @@ const getDashboardStats = async (req, res, next) => {
                 time: new Date(log.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 status: log.clockOut ? 'Clocked Out' : 'On Site',
                 subtext: log.clockOut ? `${Math.round((new Date(log.clockOut) - new Date(log.clockIn)) / (1000 * 60 * 60))}h total` : null,
-                avatar: log.userId?.fullName?.split(' ').map(n => n[0]).join('') || '??'
-            }));
-
-            stats.myJobs = managedJobs.map(j => ({
-                id: j._id,
-                name: j.name,
-                projectId: j.projectId
+                avatar: log.userId?.fullName?.split(' ').map(n => n[0]).join('') || '??',
+                lat: log.gpsIn?.latitude || null,
+                lng: log.gpsIn?.longitude || null
             }));
 
             stats.recentDailyLogs = recentLogs.map(log => ({
@@ -366,32 +349,46 @@ const getDashboardStats = async (req, res, next) => {
             }));
         }
 
-        // Productivity Data for Chart (last 7 days)
-        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        // Productivity Trend (Last 7 Days)
+        const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         const productivity = [];
+        const projectProductivity = {}; // To find Top Project
+
         for (let i = 6; i >= 0; i--) {
             const d = new Date();
             d.setDate(d.getDate() - i);
-            const dayName = days[d.getDay()];
+            const startOfDay = new Date(d); startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(d); endOfDay.setHours(23, 59, 59, 999);
 
-            const startOfDay = new Date(d);
-            startOfDay.setHours(0, 0, 0, 0);
-            const endOfDay = new Date(d);
-            endOfDay.setHours(23, 59, 59, 999);
-
-            const logs = await TimeLog.find({
-                companyId,
-                clockIn: { $gte: startOfDay, $lte: endOfDay }
-            });
-
+            const logs = await TimeLog.find({ companyId, clockIn: { $gte: startOfDay, $lte: endOfDay } });
             const totalHours = logs.reduce((acc, log) => {
-                const end = log.clockOut || (new Date().toDateString() === d.toDateString() ? new Date() : new Date(endOfDay));
-                return acc + Math.max(0, (end - new Date(log.clockIn)) / (1000 * 60 * 60));
+                const end = log.clockOut || (new Date().toDateString() === d.toDateString() ? new Date() : endOfDay);
+                const h = Math.max(0, (end - new Date(log.clockIn)) / (1000 * 60 * 60));
+
+                // Track project productivity for top project identification
+                if (log.projectId) {
+                    const pid = log.projectId.toString();
+                    projectProductivity[pid] = (projectProductivity[pid] || 0) + h;
+                }
+
+                return acc + h;
             }, 0);
 
-            productivity.push({ day: dayName, hours: Math.round(totalHours) });
+            productivity.push({ day: daysShort[d.getDay()], hours: Math.round(totalHours), date: startOfDay });
         }
         stats.trendData = productivity;
+
+        // Find Top Project for the localized "Hours Trend" section
+        const topProjectId = Object.keys(projectProductivity).sort((a, b) => projectProductivity[b] - projectProductivity[a])[0];
+        if (topProjectId) {
+            const topProj = await Project.findById(topProjectId).populate('pmId', 'fullName');
+            stats.topProject = {
+                name: topProj.name,
+                manager: topProj.pmId?.fullName || 'Unassigned',
+                hours: Math.round(projectProductivity[topProjectId]),
+                image: topProj.image || 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?q=80&w=200'
+            };
+        }
 
         res.json(stats);
     } catch (error) {

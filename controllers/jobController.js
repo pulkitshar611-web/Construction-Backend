@@ -1,30 +1,10 @@
 const Job = require('../models/Job');
 const Project = require('../models/Project');
 
-// Helper to update project progress and status based on jobs
+// Helper to update project stats (Disabled automatic progress/status as per manual control requirement)
 const updateProjectStats = async (projectId) => {
-    try {
-        const jobs = await Job.find({ projectId });
-        if (jobs.length === 0) {
-            await Project.findByIdAndUpdate(projectId, { progress: 0, status: 'planning' });
-            return;
-        }
-
-        const completedJobs = jobs.filter(j => j.status === 'completed').length;
-        const activeJobs = jobs.filter(j => j.status === 'active' || j.status === 'on-hold').length;
-        const progress = Math.round((completedJobs / jobs.length) * 100);
-
-        let status = 'planning';
-        if (progress === 100) {
-            status = 'completed';
-        } else if (progress > 0 || activeJobs > 0) {
-            status = 'active';
-        }
-
-        await Project.findByIdAndUpdate(projectId, { progress, status });
-    } catch (err) {
-        console.error('Error updating project stats:', err);
-    }
+    // Automatic updates disabled to allow manual admin control over project progress and status
+    return;
 };
 
 // GET /jobs?projectId=xxx  — list jobs for a project

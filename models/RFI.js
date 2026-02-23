@@ -18,8 +18,7 @@ const rfiSchema = new mongoose.Schema({
         required: true
     },
     rfiNumber: {
-        type: String,
-        required: true
+        type: String
     },
     subject: {
         type: String,
