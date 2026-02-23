@@ -93,9 +93,24 @@ const assignEquipment = async (req, res, next) => {
             throw new Error('Equipment not found');
         }
 
+        // Lookup job + project name for history
+        const job = await Job.findById(jobId).populate('projectId', 'name');
+        const jobName = job?.name || 'Unknown Job';
+        const projectName = job?.projectId?.name || 'Unknown Project';
+
+        const assignedNow = new Date();
         equipment.assignedJob = jobId;
-        equipment.assignedDate = new Date();
+        equipment.assignedDate = assignedNow;
         equipment.status = 'operational';
+
+        // Push to history
+        equipment.assignmentHistory.push({
+            jobId,
+            jobName,
+            projectName,
+            assignedDate: assignedNow,
+            returnedDate: null
+        });
 
         await equipment.save();
         const populated = await Equipment.findById(equipment._id).populate({
@@ -124,12 +139,43 @@ const returnEquipment = async (req, res, next) => {
             throw new Error('Equipment not found');
         }
 
+        // Stamp returnedDate on the latest open history record
+        const openRecord = [...equipment.assignmentHistory].reverse().find(h => !h.returnedDate);
+        if (openRecord) {
+            openRecord.returnedDate = new Date();
+        }
+
         equipment.assignedJob = null;
         equipment.assignedDate = null;
         equipment.status = 'idle';
 
         await equipment.save();
         res.json(equipment);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get assignment history for one equipment
+// @route   GET /api/equipment/:id/history
+// @access  Private
+const getEquipmentHistory = async (req, res, next) => {
+    try {
+        const equipment = await Equipment.findById(req.params.id);
+        if (!equipment || equipment.companyId.toString() !== req.user.companyId.toString()) {
+            res.status(404);
+            throw new Error('Equipment not found');
+        }
+        // Return sorted history (newest first) + equipment meta
+        const history = [...(equipment.assignmentHistory || [])].reverse();
+        res.json({
+            _id: equipment._id,
+            name: equipment.name,
+            category: equipment.category,
+            type: equipment.type,
+            serialNumber: equipment.serialNumber,
+            history
+        });
     } catch (error) {
         next(error);
     }
@@ -161,6 +207,42 @@ const uploadEquipmentImage = async (req, res, next) => {
     }
 };
 
+// @desc    Get ALL equipment assignment history (company-wide)
+// @route   GET /api/equipment/all-history
+// @access  Private
+const getAllEquipmentHistory = async (req, res, next) => {
+    try {
+        const allEquipment = await Equipment.find({ companyId: req.user.companyId })
+            .select('name category type serialNumber assignmentHistory imageUrl');
+
+        // Flatten all history records with equipment metadata
+        const allHistory = [];
+        for (const eq of allEquipment) {
+            for (const h of (eq.assignmentHistory || [])) {
+                allHistory.push({
+                    equipmentId: eq._id,
+                    equipmentName: eq.name,
+                    equipmentType: eq.type,
+                    equipmentCategory: eq.category,
+                    serialNumber: eq.serialNumber,
+                    jobName: h.jobName,
+                    projectName: h.projectName,
+                    assignedDate: h.assignedDate,
+                    returnedDate: h.returnedDate,
+                    notes: h.notes
+                });
+            }
+        }
+
+        // Sort newest first
+        allHistory.sort((a, b) => new Date(b.assignedDate) - new Date(a.assignedDate));
+
+        res.json(allHistory);
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getEquipment,
     createEquipment,
@@ -168,5 +250,7 @@ module.exports = {
     deleteEquipment,
     assignEquipment,
     returnEquipment,
-    uploadEquipmentImage
+    uploadEquipmentImage,
+    getEquipmentHistory,
+    getAllEquipmentHistory
 };

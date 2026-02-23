@@ -47,7 +47,17 @@ const equipmentSchema = new mongoose.Schema({
     imageUrl: {
         type: String,
         default: ''
-    }
+    },
+    assignmentHistory: [
+        {
+            jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
+            jobName: { type: String, default: '' },
+            projectName: { type: String, default: '' },
+            assignedDate: { type: Date },
+            returnedDate: { type: Date, default: null },
+            notes: { type: String, default: '' }
+        }
+    ]
 }, {
     timestamps: true
 });
