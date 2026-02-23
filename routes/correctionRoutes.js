@@ -5,7 +5,7 @@ const {
     getCorrectionRequests,
     updateCorrectionRequest
 } = require('../controllers/correctionController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect } = require('../middlewares/authMiddleware');
 
 router.use(protect);
 

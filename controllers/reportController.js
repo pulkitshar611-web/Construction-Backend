@@ -338,13 +338,32 @@ const getDashboardStats = async (req, res, next) => {
                 return acc + (end - new Date(log.clockIn)) / (1000 * 60 * 60);
             }, 0);
 
+            // Fetch assigned projects for the selection dropdown
+            const jobs = await Job.find({
+                companyId,
+                $or: [
+                    { assignedWorkers: userId },
+                    { foremanId: userId }
+                ]
+            }).populate('projectId', 'name');
+
+            const assignedProjects = jobs
+                .filter(j => j.projectId)
+                .map(j => ({
+                    _id: j.projectId._id,
+                    name: j.projectId.name,
+                    jobName: j.name,
+                    jobId: j._id
+                }));
+
             stats.workerMetrics = {
                 myHoursToday: myHoursToday.toFixed(1) + 'h',
                 currentJob: activeLog?.projectId?.name || 'Not Clocked In',
                 weeklyTarget: '40h',
                 weeklyDone: Math.round(totalWeeklyHours) + 'h done',
                 isClockedIn: !!activeLog,
-                timer: activeLog ? Math.floor((new Date() - new Date(activeLog.clockIn)) / 1000) : 0
+                timer: activeLog ? Math.floor((new Date() - new Date(activeLog.clockIn)) / 1000) : 0,
+                assignedProjects: assignedProjects
             };
 
             const myRecentActivity = await TimeLog.find({ userId })
