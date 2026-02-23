@@ -35,7 +35,17 @@ const getDrawings = async (req, res, next) => {
 // @access  Private
 const createDrawing = async (req, res, next) => {
     try {
-        const { projectId, title, drawingNumber, category, fileUrl } = req.body;
+        const { projectId, title, drawingNumber, category } = req.body;
+        let fileUrl = req.body.fileUrl;
+
+        if (req.file) {
+            fileUrl = `/uploads/drawings/${req.file.filename}`;
+        }
+
+        if (!fileUrl) {
+            res.status(400);
+            throw new Error('Please upload a drawing file');
+        }
 
         const drawing = await Drawing.create({
             companyId: req.user.companyId,
@@ -62,7 +72,18 @@ const createDrawing = async (req, res, next) => {
 // @access  Private
 const addDrawingVersion = async (req, res, next) => {
     try {
-        const { fileUrl, description } = req.body;
+        const { description } = req.body;
+        let fileUrl = req.body.fileUrl;
+
+        if (req.file) {
+            fileUrl = `/uploads/drawings/${req.file.filename}`;
+        }
+
+        if (!fileUrl) {
+            res.status(400);
+            throw new Error('Please upload a new drawing file');
+        }
+
         const drawing = await Drawing.findOne({ _id: req.params.id, companyId: req.user.companyId });
 
         if (!drawing) {
