@@ -61,6 +61,7 @@ const getJobById = async (req, res) => {
     try {
         const job = await Job.findById(req.params.id)
             .populate('foremanId', 'fullName role')
+            .populate('assignedWorkers', 'fullName role')
             .populate({
                 path: 'projectId',
                 select: 'name pmId',

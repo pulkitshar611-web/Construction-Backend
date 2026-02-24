@@ -37,6 +37,12 @@ const jobSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     }],
+    progress: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
+    },
     status: {
         type: String,
         enum: ['planning', 'active', 'on-hold', 'completed'],

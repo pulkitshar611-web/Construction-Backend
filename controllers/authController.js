@@ -187,6 +187,7 @@ const getMe = async (req, res, next) => {
 const getUsers = async (req, res, next) => {
     try {
         const query = { companyId: req.user.companyId };
+        console.log('getUsers req.user:', { id: req.user._id, role: req.user.role, companyId: req.user.companyId });
 
         // Super Admin can see all users
         if (req.user.role === 'SUPER_ADMIN') {
@@ -198,9 +199,12 @@ const getUsers = async (req, res, next) => {
             query.role = req.query.role;
         }
 
+        console.log('getUsers query:', query);
         const users = await User.find(query).select('-password');
+        console.log('getUsers found count:', users.length);
         res.json(users);
     } catch (error) {
+        console.error('getUsers error:', error);
         next(error);
     }
 };

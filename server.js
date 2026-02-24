@@ -37,6 +37,7 @@ const rfiRoutes = require('./routes/rfiRoutes');
 const payrollRoutes = require('./routes/payrollRoutes');
 const vendorRoutes = require('./routes/vendorRoutes');
 const correctionRoutes = require('./routes/correctionRoutes');
+const jobTaskRoutes = require('./routes/jobTaskRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -87,6 +88,7 @@ app.use('/api/rfis', rfiRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/vendors', vendorRoutes);
 app.use('/api/corrections', correctionRoutes);
+app.use('/api/job-tasks', jobTaskRoutes);
 
 // Root Route
 app.get('/', (req, res) => {
