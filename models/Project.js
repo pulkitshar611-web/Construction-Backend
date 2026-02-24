@@ -55,6 +55,10 @@ const projectSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
+    },
+    currentPhase: {
+        type: String,
+        default: 'Planning'
     }
 }, {
     timestamps: true

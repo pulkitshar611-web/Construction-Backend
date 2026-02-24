@@ -235,11 +235,108 @@ const getProjectMembers = async (req, res, next) => {
     }
 };
 
+// @desc    Get client-safe progress summary
+// @route   GET /api/projects/:id/client-progress
+// @access  Private (Client, Admin, PM)
+const getClientProgress = async (req, res, next) => {
+    try {
+        const Project = require('../models/Project');
+        const Job = require('../models/Job');
+        const JobTask = require('../models/JobTask');
+
+        const project = await Project.findById(req.params.id);
+        if (!project) return res.status(404).json({ message: 'Project not found' });
+
+        // Logic check: only assigned client or company staff
+        if (req.user.role === 'CLIENT' && project.clientId.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        const jobs = await Job.find({ projectId: project._id });
+        const jobIds = jobs.map(j => j._id);
+
+        const tasks = await JobTask.find({ jobId: { $in: jobIds } });
+
+        const totalTasks = tasks.length;
+        const completedTasks = tasks.filter(t => t.status === 'completed').length;
+        const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+        // Summarized Completed Work (Top 10)
+        const completedWork = tasks
+            .filter(t => t.status === 'completed')
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(0, 10)
+            .map(t => t.title);
+
+        // Upcoming Work (Next 5)
+        const upcomingWork = tasks
+            .filter(t => t.status === 'pending' || t.status === 'in-progress')
+            .sort((a, b) => (a.dueDate || Infinity) - (b.dueDate || Infinity))
+            .slice(0, 5)
+            .map(t => t.title);
+
+        res.json({
+            projectName: project.name,
+            currentPhase: project.currentPhase || 'Planning',
+            progress: progressPercentage,
+            status: project.status,
+            completedWork,
+            upcomingWork,
+            startDate: project.startDate,
+            endDate: project.endDate
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get client-visible updates
+// @route   GET /api/projects/:id/client-updates
+// @access  Private
+const getProjectClientUpdates = async (req, res, next) => {
+    try {
+        const ProjectUpdate = require('../models/ProjectUpdate');
+        const query = { projectId: req.params.id };
+
+        if (req.user.role === 'CLIENT') {
+            query.isVisibleToClient = true;
+        }
+
+        const updates = await ProjectUpdate.find(query)
+            .sort({ date: -1 })
+            .populate('createdBy', 'fullName');
+
+        res.json(updates);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Create a project update
+// @route   POST /api/projects/:id/client-updates
+// @access  Private (PM+)
+const createProjectClientUpdate = async (req, res, next) => {
+    try {
+        const ProjectUpdate = require('../models/ProjectUpdate');
+        const update = await ProjectUpdate.create({
+            ...req.body,
+            projectId: req.params.id,
+            createdBy: req.user._id
+        });
+        res.status(201).json(update);
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getProjects,
     getProjectById,
     createProject,
     updateProject,
     deleteProject,
-    getProjectMembers
+    getProjectMembers,
+    getClientProgress,
+    getProjectClientUpdates,
+    createProjectClientUpdate
 };

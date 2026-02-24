@@ -27,8 +27,11 @@ const getIssues = async (req, res, next) => {
 // @access  Private
 const createIssue = async (req, res, next) => {
     try {
+        const images = req.files ? req.files.map(file => file.path) : [];
+
         const issue = await Issue.create({
             ...req.body,
+            images,
             companyId: req.user.companyId,
             reportedBy: req.user._id
         });
@@ -50,7 +53,26 @@ const updateIssue = async (req, res, next) => {
             throw new Error('Issue not found');
         }
 
-        const updatedIssue = await Issue.findByIdAndUpdate(req.params.id, req.body, {
+        const updates = { ...req.body };
+        if (req.files && req.files.length > 0) {
+            const newImages = req.files.map(file => file.path);
+            // If the front-end sends currentImages as a JSON string or array, we use it
+            let currentImages = [];
+            if (req.body.currentImages) {
+                try {
+                    currentImages = typeof req.body.currentImages === 'string'
+                        ? JSON.parse(req.body.currentImages)
+                        : req.body.currentImages;
+                } catch (e) {
+                    currentImages = issue.images || [];
+                }
+            } else {
+                currentImages = issue.images || [];
+            }
+            updates.images = [...currentImages, ...newImages];
+        }
+
+        const updatedIssue = await Issue.findByIdAndUpdate(req.params.id, updates, {
             new: true,
             runValidators: true
         });

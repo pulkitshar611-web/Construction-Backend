@@ -6,7 +6,10 @@ const {
     createProject,
     updateProject,
     deleteProject,
-    getProjectMembers
+    getProjectMembers,
+    getClientProgress,
+    getProjectClientUpdates,
+    createProjectClientUpdate
 } = require('../controllers/projectController');
 const { protect, authorize } = require('../middlewares/authMiddleware');
 
@@ -18,6 +21,9 @@ router.get('/:id/members', getProjectMembers);
 router.post('/', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), createProject);
 router.post('/:id/assign-pm', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), updateProject); // Reuse updateProject for now or create specific controller
 router.patch('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), updateProject);
+router.get('/:id/client-progress', getClientProgress);
+router.get('/:id/client-updates', getProjectClientUpdates);
+router.post('/:id/client-updates', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), createProjectClientUpdate);
 router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), deleteProject);
 
 module.exports = router;

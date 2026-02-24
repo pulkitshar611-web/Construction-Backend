@@ -50,6 +50,9 @@ const issueSchema = new mongoose.Schema({
     photoIds: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Photo'
+    }],
+    images: [{
+        type: String // Cloudinary URLs
     }]
 }, {
     timestamps: true
