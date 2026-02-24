@@ -329,6 +329,47 @@ const createProjectClientUpdate = async (req, res, next) => {
     }
 };
 
+// @desc    Get project financial summary (PO totals)
+// @route   GET /api/projects/:id/financial-summary
+// @access  Private
+const getProjectFinancialSummary = async (req, res, next) => {
+    try {
+        const Project = require('../models/Project');
+        const PurchaseOrder = require('../models/purchaseOrder.model');
+
+        const project = await Project.findById(req.params.id);
+        if (!project) return res.status(404).json({ message: 'Project not found' });
+
+        // Sum non-cancelled POs
+        const pos = await PurchaseOrder.find({
+            projectId: project._id,
+            status: { $ne: 'Cancelled' }
+        });
+
+        const totalPoCost = pos.reduce((sum, po) => sum + (po.totalAmount || 0), 0);
+        const committedCost = pos
+            .filter(po => ['Approved', 'Sent', 'Delivered', 'Closed'].includes(po.status))
+            .reduce((sum, po) => sum + (po.totalAmount || 0), 0);
+
+        const pendingCost = totalPoCost - committedCost;
+        const budget = project.budget || 0;
+        const remainingBudget = budget - totalPoCost;
+        const utilizationPercentage = budget > 0 ? (totalPoCost / budget) * 100 : 0;
+
+        res.json({
+            totalBudget: budget,
+            totalPoCost,
+            committedCost,
+            pendingCost,
+            remainingBudget,
+            utilizationPercentage: utilizationPercentage.toFixed(2),
+            poCount: pos.length
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getProjects,
     getProjectById,
@@ -338,5 +379,6 @@ module.exports = {
     getProjectMembers,
     getClientProgress,
     getProjectClientUpdates,
-    createProjectClientUpdate
+    createProjectClientUpdate,
+    getProjectFinancialSummary
 };

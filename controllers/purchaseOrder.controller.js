@@ -6,7 +6,7 @@ const Counter = require('../models/Counter');
 // Create PO
 exports.createPO = async (req, res) => {
     try {
-        const { projectId, vendorId, vendorName, vendorEmail, items, notes, expectedDeliveryDate, totalAmount, subtotal, tax } = req.body;
+        const { projectId, jobId, vendorId, vendorName, vendorEmail, items, notes, expectedDeliveryDate, totalAmount, subtotal, tax } = req.body;
 
         // Skip strict Vendor verification if vendorName is provided
         if (vendorId) {
@@ -34,6 +34,7 @@ exports.createPO = async (req, res) => {
             companyId: req.user.companyId || req.user.company?._id || req.body.companyId,
             poNumber,
             projectId,
+            jobId,
             vendorId,
             vendorName,
             vendorEmail,
@@ -57,7 +58,7 @@ exports.createPO = async (req, res) => {
 // Get All POs with Filters
 exports.getAllPOs = async (req, res) => {
     try {
-        const { projectId, vendorId, status, startDate, endDate } = req.query;
+        const { projectId, jobId, vendorId, status, startDate, endDate } = req.query;
         let query = {};
 
         // Security: Visibility logic
@@ -69,6 +70,7 @@ exports.getAllPOs = async (req, res) => {
 
         // Apply filters
         if (projectId) query.projectId = projectId;
+        if (jobId) query.jobId = jobId;
         if (vendorId) query.vendorId = vendorId;
         if (status) query.status = status;
         if (startDate && endDate) {

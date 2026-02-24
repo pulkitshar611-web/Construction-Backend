@@ -9,7 +9,8 @@ const {
     getProjectMembers,
     getClientProgress,
     getProjectClientUpdates,
-    createProjectClientUpdate
+    createProjectClientUpdate,
+    getProjectFinancialSummary
 } = require('../controllers/projectController');
 const { protect, authorize } = require('../middlewares/authMiddleware');
 
@@ -24,6 +25,7 @@ router.patch('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), updateProj
 router.get('/:id/client-progress', getClientProgress);
 router.get('/:id/client-updates', getProjectClientUpdates);
 router.post('/:id/client-updates', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), createProjectClientUpdate);
+router.get('/:id/financial-summary', getProjectFinancialSummary);
 router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), deleteProject);
 
 module.exports = router;

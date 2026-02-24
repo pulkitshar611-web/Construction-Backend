@@ -16,6 +16,10 @@ const purchaseOrderSchema = new mongoose.Schema({
         ref: 'Project',
         required: true
     },
+    jobId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Job'
+    },
     vendorId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Vendor'
