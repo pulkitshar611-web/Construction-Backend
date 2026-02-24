@@ -1,4 +1,5 @@
 const Drawing = require('../models/Drawing');
+const DrawingAnnotation = require('../models/DrawingAnnotation');
 
 // @desc    Get all drawings
 // @route   GET /api/drawings
@@ -126,9 +127,116 @@ const deleteDrawing = async (req, res, next) => {
     }
 };
 
+// @desc    Get annotations for a drawing version
+// @route   GET /api/drawings/:id/annotations?versionId=...
+// @access  Private
+const getDrawingAnnotations = async (req, res, next) => {
+    try {
+        const { versionId } = req.query;
+        const query = { drawingId: req.params.id };
+
+        if (versionId) {
+            query.versionId = versionId;
+        }
+
+        if (req.user.role === 'CLIENT') {
+            query.isVisibleToClient = true;
+        }
+
+        const annotations = await DrawingAnnotation.find(query)
+            .populate('userId', 'fullName role')
+            .sort({ createdAt: 1 });
+
+        res.json(annotations);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Create an annotation
+// @route   POST /api/drawings/:id/annotations
+// @access  Private
+const createDrawingAnnotation = async (req, res, next) => {
+    try {
+        const { versionId, pageNumber, type, coordinates, content, isVisibleToClient } = req.body;
+
+        const annotation = await DrawingAnnotation.create({
+            drawingId: req.params.id,
+            versionId,
+            userId: req.user._id,
+            pageNumber,
+            type,
+            coordinates,
+            content,
+            isVisibleToClient: isVisibleToClient ?? true
+        });
+
+        const populated = await DrawingAnnotation.findById(annotation._id).populate('userId', 'fullName role');
+        res.status(201).json(populated);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Update an annotation
+// @route   PATCH /api/drawings/annotations/:id
+// @access  Private
+const updateDrawingAnnotation = async (req, res, next) => {
+    try {
+        const annotation = await DrawingAnnotation.findById(req.params.id);
+
+        if (!annotation) {
+            return res.status(404).json({ message: 'Annotation not found' });
+        }
+
+        // Clients can't resolve/update others' annotations
+        if (req.user.role === 'CLIENT' && annotation.userId.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Unauthorized' });
+        }
+
+        const updated = await DrawingAnnotation.findByIdAndUpdate(
+            req.params.id,
+            req.body,
+            { new: true }
+        ).populate('userId', 'fullName role');
+
+        res.json(updated);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Delete an annotation
+// @route   DELETE /api/drawings/annotations/:id
+// @access  Private
+const deleteDrawingAnnotation = async (req, res, next) => {
+    try {
+        const annotation = await DrawingAnnotation.findById(req.params.id);
+
+        if (!annotation) {
+            return res.status(404).json({ message: 'Annotation not found' });
+        }
+
+        // Only creator or Admin/PM can delete
+        if (!['SUPER_ADMIN', 'COMPANY_OWNER', 'PM'].includes(req.user.role) &&
+            annotation.userId.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Unauthorized' });
+        }
+
+        await DrawingAnnotation.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Annotation removed' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDrawings,
     createDrawing,
     addDrawingVersion,
-    deleteDrawing
+    deleteDrawing,
+    getDrawingAnnotations,
+    createDrawingAnnotation,
+    updateDrawingAnnotation,
+    deleteDrawingAnnotation
 };

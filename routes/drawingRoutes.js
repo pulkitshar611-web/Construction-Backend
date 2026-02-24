@@ -11,4 +11,17 @@ router.post('/', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'ENGINEER'), up
 router.post('/:id/versions', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'ENGINEER'), upload.single('file'), addDrawingVersion);
 router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), deleteDrawing);
 
+// Annotation Routes
+const {
+    getDrawingAnnotations,
+    createDrawingAnnotation,
+    updateDrawingAnnotation,
+    deleteDrawingAnnotation
+} = require('../controllers/drawingController');
+
+router.get('/:id/annotations', getDrawingAnnotations);
+router.post('/:id/annotations', createDrawingAnnotation);
+router.patch('/annotations/:id', updateDrawingAnnotation);
+router.delete('/annotations/:id', deleteDrawingAnnotation);
+
 module.exports = router;
