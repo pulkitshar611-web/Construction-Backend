@@ -43,18 +43,60 @@ const authorize = (...roles) => {
     };
 };
 
-const checkPermission = (permission) => {
+const checkPermission = (permissionKey) => {
     return async (req, res, next) => {
+        const UserPermission = require('../models/UserPermission');
         const RolePermission = require('../models/RolePermission');
-        const rolePerm = await RolePermission.findOne({ role: req.user.role });
+        const Permission = require('../models/Permission');
+        const Role = require('../models/Role');
 
-        if (req.user.role === 'SUPER_ADMIN') return next();
+        try {
+            if (req.user.role === 'SUPER_ADMIN') return next();
 
-        if (!rolePerm || (!rolePerm.permissions.includes(permission) && !rolePerm.permissions.includes('ALL'))) {
+            // 1. Find the permission ID by key
+            const permission = await Permission.findOne({ key: permissionKey });
+            if (!permission) {
+                // If permission key doesn't exist in DB, check if it's a legacy check or just deny
+                console.warn(`Permission key not found: ${permissionKey}`);
+                res.status(403);
+                return next(new Error(`System error: Permission ${permissionKey} is not defined.`));
+            }
+
+            // 2. Check User-specific override
+            const userOverride = await UserPermission.findOne({
+                userId: req.user._id,
+                permissionId: permission._id
+            });
+
+            if (userOverride) {
+                if (userOverride.isAllowed) return next();
+                res.status(403);
+                return next(new Error(`Permission denied: ${permissionKey} is explicitly revoked for this user.`));
+            }
+
+            // 3. Check Role-based permission
+            // First, get the role ID if not already populated
+            let roleId = req.user.roleId;
+            if (!roleId) {
+                const roleDoc = await Role.findOne({ name: req.user.role });
+                if (roleDoc) roleId = roleDoc._id;
+            }
+
+            if (roleId) {
+                const rolePerm = await RolePermission.findOne({
+                    roleId: roleId,
+                    permissionId: permission._id
+                });
+                if (rolePerm) return next();
+            }
+
             res.status(403);
-            return next(new Error(`Permission denied: ${permission} required`));
+            return next(new Error(`Permission denied: ${permissionKey} required`));
+        } catch (error) {
+            console.error('Permission check error:', error);
+            res.status(500);
+            next(new Error('Internal server error during permission check'));
         }
-        next();
     };
 };
 

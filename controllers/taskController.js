@@ -1,3 +1,6 @@
+const Task = require('../models/Task');
+const Job = require('../models/Job');
+const AuditLog = require('../models/AuditLog');
 const { dispatchNotification } = require('../utils/notificationHelper');
 
 // @desc    Get tasks (role-based)

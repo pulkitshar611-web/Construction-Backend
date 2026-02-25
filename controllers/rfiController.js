@@ -6,7 +6,39 @@ const RFI = require('../models/RFI');
 const getRFIs = async (req, res, next) => {
     try {
         const query = { companyId: req.user.companyId };
-        if (req.query.projectId) query.projectId = req.query.projectId;
+
+        // Data Access Scope Layer
+        if (req.user.role === 'CLIENT') {
+            // Client: Only their project only
+            // Assuming Project model has clientId, we filter RFIs by projects where this user is the client
+            const Project = require('../models/Project');
+            const projects = await Project.find({ clientId: req.user._id }, '_id');
+            const projectIds = projects.map(p => p._id);
+            query.projectId = { $in: projectIds };
+        } else if (req.user.role === 'SUBCONTRACTOR') {
+            // Subcontractor: Only assigned RFI or project assigned (depending on exact requirement)
+            // User request says "Only assigned RFI (if Sub)"
+            query.$or = [
+                { raisedBy: req.user._id },
+                { assignedTo: req.user._id }
+            ];
+        } else if (req.user.role === 'FOREMAN' || req.user.role === 'PM') {
+            // Foreman/PM: Assigned projects (For now assuming they have access to all project RFIs if they hit the endpoint with a projectId)
+            // If we want strict project assignment, we would need to filter by projects they are assigned to.
+        }
+
+        if (req.query.projectId) {
+            // Ensure the requested projectId is within the allowed scope for CLIENT
+            if (req.user.role === 'CLIENT') {
+                const allowedProjects = query.projectId.$in.map(id => id.toString());
+                if (!allowedProjects.includes(req.query.projectId)) {
+                    res.status(403);
+                    throw new Error('Not authorized to access RFIs for this project');
+                }
+            }
+            query.projectId = req.query.projectId;
+        }
+
         if (req.query.status) query.status = req.query.status;
         if (req.query.priority) query.priority = req.query.priority;
 
@@ -38,20 +70,34 @@ const getRFIStats = async (req, res, next) => {
     try {
         const companyId = req.user.companyId;
         const now = new Date();
+        const query = { companyId };
+
+        // Scope filter
+        if (req.user.role === 'CLIENT') {
+            const Project = require('../models/Project');
+            const projects = await Project.find({ clientId: req.user._id }, '_id');
+            const projectIds = projects.map(p => p._id);
+            query.projectId = { $in: projectIds };
+        } else if (req.user.role === 'SUBCONTRACTOR') {
+            query.$or = [
+                { raisedBy: req.user._id },
+                { assignedTo: req.user._id }
+            ];
+        }
 
         const [total, open, inReview, answered, closed, overdue, highPriority, recent] = await Promise.all([
-            RFI.countDocuments({ companyId }),
-            RFI.countDocuments({ companyId, status: 'open' }),
-            RFI.countDocuments({ companyId, status: 'in_review' }),
-            RFI.countDocuments({ companyId, status: 'answered' }),
-            RFI.countDocuments({ companyId, status: 'closed' }),
-            RFI.countDocuments({ companyId, status: { $ne: 'closed' }, dueDate: { $lt: now } }),
-            RFI.find({ companyId, priority: 'high', status: { $ne: 'closed' } })
+            RFI.countDocuments(query),
+            RFI.countDocuments({ ...query, status: 'open' }),
+            RFI.countDocuments({ ...query, status: 'in_review' }),
+            RFI.countDocuments({ ...query, status: 'answered' }),
+            RFI.countDocuments({ ...query, status: 'closed' }),
+            RFI.countDocuments({ ...query, status: { $ne: 'closed' }, dueDate: { $lt: now } }),
+            RFI.find({ ...query, priority: 'high', status: { $ne: 'closed' } })
                 .populate('projectId', 'name')
                 .populate('raisedBy', 'fullName')
                 .sort({ createdAt: -1 })
                 .limit(5),
-            RFI.find({ companyId })
+            RFI.find(query)
                 .populate('projectId', 'name')
                 .populate('raisedBy', 'fullName')
                 .populate('assignedTo', 'fullName')
@@ -60,7 +106,7 @@ const getRFIStats = async (req, res, next) => {
         ]);
 
         const overdueList = await RFI.find({
-            companyId,
+            ...query,
             status: { $ne: 'closed' },
             dueDate: { $lt: now }
         })
@@ -85,7 +131,22 @@ const getRFIStats = async (req, res, next) => {
 // @access  Private
 const getRFIById = async (req, res, next) => {
     try {
-        const rfi = await RFI.findOne({ _id: req.params.id, companyId: req.user.companyId })
+        const query = { _id: req.params.id, companyId: req.user.companyId };
+
+        // Scope filter
+        if (req.user.role === 'CLIENT') {
+            const Project = require('../models/Project');
+            const projects = await Project.find({ clientId: req.user._id }, '_id');
+            const projectIds = projects.map(p => p._id);
+            query.projectId = { $in: projectIds };
+        } else if (req.user.role === 'SUBCONTRACTOR') {
+            query.$or = [
+                { raisedBy: req.user._id },
+                { assignedTo: req.user._id }
+            ];
+        }
+
+        const rfi = await RFI.findOne(query)
             .populate('projectId', 'name')
             .populate('raisedBy', 'fullName email role')
             .populate('assignedTo', 'fullName email role')
@@ -93,7 +154,7 @@ const getRFIById = async (req, res, next) => {
 
         if (!rfi) {
             res.status(404);
-            throw new Error('RFI not found');
+            throw new Error('RFI not found or access denied');
         }
 
         const obj = rfi.toJSON();

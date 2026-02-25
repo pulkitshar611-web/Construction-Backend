@@ -9,7 +9,7 @@ const {
     updateTask,
     deleteTask
 } = require('../controllers/taskController');
-const { protect, authorize } = require('../middlewares/authMiddleware');
+const { protect, authorize, checkPermission } = require('../middlewares/authMiddleware');
 
 router.use(protect);
 
@@ -17,11 +17,11 @@ router.use(protect);
 router.get('/my-tasks', getMyTasks);
 router.get('/project/:projectId', getProjectTasks);
 
-router.get('/', getTasks);
-router.post('/', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'FOREMAN'), createTask);
+router.get('/', checkPermission('VIEW_TASKS'), getTasks);
+router.post('/', checkPermission('CREATE_TASK'), createTask);
 
-router.put('/:id/assign', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'FOREMAN'), assignTask);
-router.patch('/:id', updateTask); // All roles — internal checks in controller
-router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), deleteTask);
+router.put('/:id/assign', checkPermission('EDIT_TASK'), assignTask);
+router.patch('/:id', updateTask); // Internal role checks or generic update
+router.delete('/:id', checkPermission('DELETE_TASK'), deleteTask);
 
 module.exports = router;

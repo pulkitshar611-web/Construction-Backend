@@ -1,99 +1,226 @@
+const Role = require('../models/Role');
+const Permission = require('../models/Permission');
 const RolePermission = require('../models/RolePermission');
+const UserPermission = require('../models/UserPermission');
+const User = require('../models/User');
 
-const DEFAULT_PERMISSIONS = {
-    'SUPER_ADMIN': ['ALL'],
-    'COMPANY_OWNER': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'MANAGE_PROJECTS', 'VIEW_SCHEDULE', 'MANAGE_SCHEDULE', 'VIEW_TASKS', 'MANAGE_TASKS', 'VIEW_DRAWINGS', 'MANAGE_DRAWINGS', 'VIEW_PHOTOS', 'MANAGE_PHOTOS', 'VIEW_DAILY_LOGS', 'MANAGE_DAILY_LOGS', 'VIEW_ISSUES', 'MANAGE_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'VIEW_REPORTS', 'ACCESS_SETTINGS', 'CLOCK_IN_OUT', 'CLOCK_IN_CREW', 'VIEW_FINANCIALS', 'MANAGE_FINANCIALS', 'VIEW_RFI', 'MANAGE_RFI', 'VIEW_EQUIPMENT', 'MANAGE_EQUIPMENT'],
-    'PM': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'MANAGE_PROJECTS', 'VIEW_SCHEDULE', 'MANAGE_SCHEDULE', 'VIEW_TASKS', 'MANAGE_TASKS', 'VIEW_DRAWINGS', 'MANAGE_DRAWINGS', 'VIEW_PHOTOS', 'MANAGE_PHOTOS', 'VIEW_DAILY_LOGS', 'MANAGE_DAILY_LOGS', 'VIEW_ISSUES', 'MANAGE_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'VIEW_REPORTS', 'ACCESS_SETTINGS', 'CLOCK_IN_OUT', 'CLOCK_IN_CREW', 'VIEW_FINANCIALS', 'VIEW_RFI', 'MANAGE_RFI', 'VIEW_EQUIPMENT', 'MANAGE_EQUIPMENT'],
-    'FOREMAN': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_SCHEDULE', 'VIEW_TASKS', 'MANAGE_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_DAILY_LOGS', 'MANAGE_DAILY_LOGS', 'VIEW_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'CLOCK_IN_CREW', 'VIEW_RFI'],
-    'WORKER': ['VIEW_DASHBOARD', 'VIEW_MY_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'ACCESS_CHAT'],
-    'ENGINEER': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_DRAWINGS', 'MANAGE_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'ACCESS_CHAT'],
-    'CLIENT': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_PHOTOS', 'VIEW_CHAT', 'VIEW_INVOICES'],
-    'SUBCONTRACTOR': ['VIEW_DASHBOARD', 'VIEW_PROJECTS', 'VIEW_MY_TASKS', 'CLOCK_IN_OUT', 'VIEW_DRAWINGS', 'VIEW_PHOTOS', 'VIEW_DAILY_LOGS', 'VIEW_ISSUES', 'VIEW_CHAT', 'ACCESS_CHAT', 'VIEW_EQUIPMENT', 'VIEW_RFI']
-};
-
-// Internal helper to ensure roles are seeded
-const seedRoles = async () => {
-    for (const [role, perms] of Object.entries(DEFAULT_PERMISSIONS)) {
-        const roleDoc = await RolePermission.findOne({ role });
-        if (!roleDoc) {
-            await RolePermission.create({ role, permissions: perms });
-        } else {
-            // Update permissions if they've changed in the code
-            roleDoc.permissions = perms;
-            await roleDoc.save();
-        }
-    }
-};
-
-// Run seeding on startup (optional, here we call it inside getRoles)
-seedRoles().catch(console.error);
-
-
-// @desc    Get all role permissions
+// @desc    Get all roles
 // @route   GET /api/roles
 // @access  Private (SUPER_ADMIN, COMPANY_OWNER)
 const getRoles = async (req, res, next) => {
     try {
-        const roles = await RolePermission.find();
-        res.json(roles);
+        const roles = await Role.find().sort({ name: 1 });
+
+        // Fetch permissions for each role
+        const rolesWithPerms = await Promise.all(roles.map(async (role) => {
+            const rolePermissionDocs = await RolePermission.find({ roleId: role._id }).populate('permissionId');
+            return {
+                _id: role._id,
+                name: role.name,
+                description: role.description,
+                permissions: rolePermissionDocs.map(rp => rp.permissionId.key)
+            };
+        }));
+
+        res.json(rolesWithPerms);
     } catch (error) {
         next(error);
     }
 };
 
-// @desc    Update permissions for a role
-// @route   PUT /api/roles/:role
-// @access  Private (SUPER_ADMIN)
-/*
-NOTE: Full dynamic editing of permissions is usually a SUPER_ADMIN feature to ensure system stability.
-However, for this Construction SaaS, the COMPANY_OWNER might want to tweak PM vs Foreman roles.
-For now, we'll allow COMPANY_OWNER as per implementation plan.
-*/
+// @desc    Update permissions for a specific role
+// @route   PUT /api/roles/:roleName
+// @access  Private (Admin)
 const updateRolePermissions = async (req, res, next) => {
     try {
-        const { permissions } = req.body;
-        const roleName = req.params.role;
+        const { roleName } = req.params;
+        const { permissions } = req.body; // Array of permission keys
 
-        let rolePerm = await RolePermission.findOne({ role: roleName });
-
-        if (rolePerm) {
-            rolePerm.permissions = permissions;
-            await rolePerm.save();
-        } else {
-            rolePerm = await RolePermission.create({
-                role: roleName,
-                permissions
-            });
+        const role = await Role.findOne({ name: roleName });
+        if (!role) {
+            res.status(404);
+            throw new Error('Role not found');
         }
 
-        // Emit socket event to notify clients
-        const io = req.app.get('io');
-        if (io) {
-            io.emit('permissions_updated', { role: roleName });
+        // 1. Delete existing permissions for this role
+        await RolePermission.deleteMany({ roleId: role._id });
+
+        // 2. Add new permissions
+        if (permissions && Array.isArray(permissions)) {
+            for (const key of permissions) {
+                const perm = await Permission.findOne({ key });
+                if (perm) {
+                    await RolePermission.create({
+                        roleId: role._id,
+                        permissionId: perm._id
+                    });
+                }
+            }
         }
 
-        res.json(rolePerm);
+        res.json({ message: `Permissions for role ${roleName} updated successfully` });
     } catch (error) {
         next(error);
     }
 };
 
-// @desc    Get permissions for current user's role
+// @desc    Get all system permissions grouped by module
+// @route   GET /api/roles/permissions
+// @access  Private (Admin)
+const getAllPermissions = async (req, res, next) => {
+    try {
+        const permissions = await Permission.find().sort({ module: 1, key: 1 });
+        res.json(permissions);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Bulk update permissions for multiple roles
+// @route   PUT /api/roles/bulk
+// @access  Private (Admin)
+const bulkUpdateRolePermissions = async (req, res, next) => {
+    try {
+        const { roleUpdates } = req.body; // Array of { roleName: 'PM', permissions: ['VIEW_TASKS', ...] }
+
+        if (!roleUpdates || !Array.isArray(roleUpdates)) {
+            res.status(400);
+            throw new Error('Invalid role updates data');
+        }
+
+        for (const update of roleUpdates) {
+            const role = await Role.findOne({ name: update.roleName });
+            if (!role) continue;
+
+            // Delete existing permissions for this role
+            await RolePermission.deleteMany({ roleId: role._id });
+
+            // Add new permissions
+            if (update.permissions && Array.isArray(update.permissions)) {
+                for (const key of update.permissions) {
+                    const perm = await Permission.findOne({ key });
+                    if (perm) {
+                        await RolePermission.create({
+                            roleId: role._id,
+                            permissionId: perm._id
+                        });
+                    }
+                }
+            }
+        }
+
+        res.json({ message: 'Bulk permissions updated successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get permissions for a specific user (Role base + Overrides)
+// @route   GET /api/roles/user/:userId
+// @access  Private (Admin)
+const getUserPermissions = async (req, res, next) => {
+    try {
+        const { userId } = req.params;
+        const user = await User.findById(userId).populate('roleId');
+        if (!user) {
+            res.status(404);
+            throw new Error('User not found');
+        }
+
+        // Get Permissions from Role
+        let rolePerms = [];
+        if (user.roleId) {
+            const rolePermissionDocs = await RolePermission.find({ roleId: user.roleId }).populate('permissionId');
+            rolePerms = rolePermissionDocs.map(rp => rp.permissionId.key);
+        } else {
+            // Fallback for users without roleId (using string role)
+            const roleDoc = await Role.findOne({ name: user.role });
+            if (roleDoc) {
+                const rolePermissionDocs = await RolePermission.find({ roleId: roleDoc._id }).populate('permissionId');
+                rolePerms = rolePermissionDocs.map(rp => rp.permissionId.key);
+            }
+        }
+
+        // Get Overrides
+        const overrides = await UserPermission.find({ userId }).populate('permissionId');
+
+        res.json({
+            rolePermissions: rolePerms,
+            overrides: overrides.map(o => ({
+                key: o.permissionId.key,
+                isAllowed: o.isAllowed
+            }))
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Update user permission overrides
+// @route   POST /api/roles/user/:userId/overrides
+// @access  Private (Admin)
+const updateUserOverrides = async (req, res, next) => {
+    try {
+        const { userId } = req.params;
+        const { overrides } = req.body; // Array of { key: 'VIEW_RFI', isAllowed: true/false }
+
+        for (const override of overrides) {
+            const perm = await Permission.findOne({ key: override.key });
+            if (!perm) continue;
+
+            await UserPermission.findOneAndUpdate(
+                { userId, permissionId: perm._id },
+                { userId, permissionId: perm._id, isAllowed: override.isAllowed },
+                { upsert: true, new: true }
+            );
+        }
+
+        res.json({ message: 'User overrides updated successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get permissions for current user
 // @route   GET /api/roles/my-permissions
 // @access  Private
 const getMyPermissions = async (req, res, next) => {
     try {
-        let rolePerm = await RolePermission.findOne({ role: req.user.role });
-
-        if (!rolePerm) {
-            // Fallback to internal defaults if DB record is missing
-            const perms = DEFAULT_PERMISSIONS[req.user.role] || [];
-            return res.json({
-                role: req.user.role,
-                permissions: perms
-            });
+        if (req.user.role === 'SUPER_ADMIN') {
+            return res.json({ role: 'SUPER_ADMIN', permissions: ['ALL'] });
         }
-        res.json(rolePerm);
+
+        const userId = req.user._id;
+
+        // This is a bit redundant with the middleware logic but good for frontend to have a list
+        const allPermsDocs = await Permission.find();
+        const finalPermissions = [];
+
+        for (const perm of allPermsDocs) {
+            // Check override
+            const override = await UserPermission.findOne({ userId, permissionId: perm._id });
+            if (override) {
+                if (override.isAllowed) finalPermissions.push(perm.key);
+                continue;
+            }
+
+            // Check role
+            let roleId = req.user.roleId;
+            if (!roleId) {
+                const roleDoc = await Role.findOne({ name: req.user.role });
+                if (roleDoc) roleId = roleDoc._id;
+            }
+
+            if (roleId) {
+                const rolePerm = await RolePermission.findOne({ roleId, permissionId: perm._id });
+                if (rolePerm) finalPermissions.push(perm.key);
+            }
+        }
+
+        res.json({
+            role: req.user.role,
+            permissions: finalPermissions
+        });
     } catch (error) {
         next(error);
     }
@@ -101,6 +228,10 @@ const getMyPermissions = async (req, res, next) => {
 
 module.exports = {
     getRoles,
+    getAllPermissions,
+    getUserPermissions,
+    updateUserOverrides,
+    getMyPermissions,
     updateRolePermissions,
-    getMyPermissions
+    bulkUpdateRolePermissions
 };

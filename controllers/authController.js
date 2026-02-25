@@ -288,6 +288,7 @@ const createUser = async (req, res, next) => {
             email,
             password,
             role: role || 'WORKER',
+            roleId: req.body.roleId,
             companyId: req.user.companyId,
             phone,
             isActive: true // Created by admin, so active by default

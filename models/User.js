@@ -25,6 +25,10 @@ const userSchema = new mongoose.Schema({
         enum: ['SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'FOREMAN', 'WORKER', 'CLIENT', 'SUBCONTRACTOR'],
         default: 'WORKER'
     },
+    roleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Role'
+    },
     phone: {
         type: String
     },
