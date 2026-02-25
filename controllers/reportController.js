@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const TimeLog = require('../models/TimeLog');
@@ -320,7 +321,7 @@ const getDashboardStats = async (req, res, next) => {
             }));
         }
 
-        if (['WORKER', 'SUBCONTRACTOR'].includes(role)) {
+        if (['WORKER', 'SUBCONTRACTOR', 'FOREMAN'].includes(role)) {
             const myLogsToday = await TimeLog.find({ userId, clockIn: { $gte: today } });
             const myHoursToday = myLogsToday.reduce((acc, log) => {
                 const end = log.clockOut || new Date();
@@ -429,4 +430,487 @@ const getDashboardStats = async (req, res, next) => {
     }
 };
 
-module.exports = { getProjectReport, getCompanyReport, getDashboardStats };
+// @desc    Get worker-specific attendance reports
+// @route   GET /api/reports/attendance/workers
+// @access  Private (Admin, PM)
+const getWorkerAttendanceReport = async (req, res, next) => {
+    try {
+        const { startDate, endDate, projectId, userId } = req.query;
+        const companyId = req.user.companyId;
+
+        const match = { companyId: new mongoose.Types.ObjectId(companyId) };
+
+        if (startDate || endDate) {
+            match.clockIn = {};
+            if (startDate) match.clockIn.$gte = new Date(startDate);
+            if (endDate) match.clockIn.$lte = new Date(endDate);
+        }
+
+        if (projectId) match.projectId = new mongoose.Types.ObjectId(projectId);
+        if (userId) match.userId = new mongoose.Types.ObjectId(userId);
+
+        const aggregation = [
+            { $match: match },
+            {
+                $addFields: {
+                    duration: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    },
+                    workDay: { $dateToString: { format: "%Y-%m-%d", date: "$clockIn" } }
+                }
+            },
+            {
+                $group: {
+                    _id: { userId: "$userId", projectId: "$projectId" },
+                    totalHours: { $sum: "$duration" },
+                    daysWorked: { $addToSet: "$workDay" },
+                    totalEntries: { $sum: 1 }
+                }
+            },
+            {
+                $group: {
+                    _id: "$_id.userId",
+                    projects: {
+                        $push: {
+                            projectId: "$_id.projectId",
+                            totalHours: "$totalHours"
+                        }
+                    },
+                    overallHours: { $sum: "$totalHours" },
+                    allDaysWorked: { $push: "$daysWorked" }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    fullName: '$user.fullName',
+                    email: '$user.email',
+                    role: '$user.role',
+                    totalHours: { $round: ["$overallHours", 2] },
+                    totalDaysWorked: {
+                        $size: {
+                            $reduce: {
+                                input: "$allDaysWorked",
+                                initialValue: [],
+                                in: { $setUnion: ["$$value", "$$this"] }
+                            }
+                        }
+                    },
+                    averageHoursPerDay: {
+                        $cond: [
+                            { $gt: [{ $size: { $reduce: { input: "$allDaysWorked", initialValue: [], in: { $setUnion: ["$$value", "$$this"] } } } }, 0] },
+                            { $round: [{ $divide: ["$overallHours", { $size: { $reduce: { input: "$allDaysWorked", initialValue: [], in: { $setUnion: ["$$value", "$$this"] } } } }] }, 2] },
+                            0
+                        ]
+                    }
+                }
+            },
+            { $sort: { fullName: 1 } }
+        ];
+
+        const report = await TimeLog.aggregate(aggregation);
+        res.json(report);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get foreman-specific attendance reports
+// @route   GET /api/reports/attendance/foremen
+// @access  Private (Admin, PM)
+const getForemanAttendanceReport = async (req, res, next) => {
+    try {
+        const { startDate, endDate, projectId, userId } = req.query;
+        const companyId = req.user.companyId;
+
+        // First find foremen in the company
+        const foremen = await User.find({ companyId, role: 'FOREMAN' }).select('_id');
+        const foremanIds = foremen.map(f => f._id);
+
+        const match = {
+            companyId: new mongoose.Types.ObjectId(companyId),
+            userId: { $in: foremanIds }
+        };
+
+        if (startDate || endDate) {
+            match.clockIn = {};
+            if (startDate) match.clockIn.$gte = new Date(startDate);
+            if (endDate) match.clockIn.$lte = new Date(endDate);
+        }
+
+        if (projectId) match.projectId = new mongoose.Types.ObjectId(projectId);
+        if (userId) {
+            const requestedUserId = new mongoose.Types.ObjectId(userId);
+            if (foremanIds.some(id => id.equals(requestedUserId))) {
+                match.userId = requestedUserId;
+            } else {
+                return res.json([]); // Not a foreman
+            }
+        }
+
+        const aggregation = [
+            { $match: match },
+            {
+                $addFields: {
+                    duration: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    },
+                    workDay: { $dateToString: { format: "%Y-%m-%d", date: "$clockIn" } }
+                }
+            },
+            {
+                $group: {
+                    _id: { userId: "$userId", projectId: "$projectId" },
+                    totalHours: { $sum: "$duration" },
+                    daysWorked: { $addToSet: "$workDay" },
+                    totalEntries: { $sum: 1 }
+                }
+            },
+            {
+                $group: {
+                    _id: "$_id.userId",
+                    overallHours: { $sum: "$totalHours" },
+                    allDaysWorked: { $push: "$daysWorked" }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    fullName: '$user.fullName',
+                    totalHours: { $round: ["$overallHours", 2] },
+                    totalDaysWorked: {
+                        $size: {
+                            $reduce: {
+                                input: "$allDaysWorked",
+                                initialValue: [],
+                                in: { $setUnion: ["$$value", "$$this"] }
+                            }
+                        }
+                    },
+                    averageHoursPerDay: {
+                        $cond: [
+                            { $gt: [{ $size: { $reduce: { input: "$allDaysWorked", initialValue: [], in: { $setUnion: ["$$value", "$$this"] } } } }, 0] },
+                            { $round: [{ $divide: ["$overallHours", { $size: { $reduce: { input: "$allDaysWorked", initialValue: [], in: { $setUnion: ["$$value", "$$this"] } } } }] }, 2] },
+                            0
+                        ]
+                    }
+                }
+            },
+            { $sort: { fullName: 1 } }
+        ];
+
+        const report = await TimeLog.aggregate(aggregation);
+        res.json(report);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get project-level attendance summary
+// @route   GET /api/reports/attendance/projects
+// @access  Private (Admin, PM)
+const getProjectAttendanceReport = async (req, res, next) => {
+    try {
+        const { startDate, endDate, projectId } = req.query;
+        const companyId = req.user.companyId;
+
+        const match = { companyId: new mongoose.Types.ObjectId(companyId) };
+
+        if (startDate || endDate) {
+            match.clockIn = {};
+            if (startDate) match.clockIn.$gte = new Date(startDate);
+            if (endDate) match.clockIn.$lte = new Date(endDate);
+        }
+
+        if (projectId) match.projectId = new mongoose.Types.ObjectId(projectId);
+
+        const aggregation = [
+            { $match: match },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $addFields: {
+                    duration: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    }
+                }
+            },
+            {
+                $group: {
+                    _id: "$projectId",
+                    totalHours: { $sum: "$duration" },
+                    totalEntries: { $sum: 1 },
+                    workerHours: {
+                        $sum: { $cond: [{ $eq: ["$user.role", "WORKER"] }, "$duration", 0] }
+                    },
+                    foremanHours: {
+                        $sum: { $cond: [{ $eq: ["$user.role", "FOREMAN"] }, "$duration", 0] }
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'projects',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'project'
+                }
+            },
+            { $unwind: { path: '$project', preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    projectName: { $ifNull: ["$project.name", "Manual Entries"] },
+                    totalHours: { $round: ["$totalHours", 2] },
+                    workerHours: { $round: ["$workerHours", 2] },
+                    foremanHours: { $round: ["$foremanHours", 2] },
+                    totalAttendanceEntries: "$totalEntries"
+                }
+            },
+            { $sort: { projectName: 1 } }
+        ];
+
+        const report = await TimeLog.aggregate(aggregation);
+        res.json(report);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Export attendance report (PDF/CSV)
+// @route   GET /api/reports/attendance/export
+// @access  Private (Admin, PM)
+const exportAttendanceReport = async (req, res, next) => {
+    try {
+        const { type, reportType, startDate, endDate, projectId } = req.query;
+        const companyId = req.user.companyId;
+        const PDFDocument = require('pdfkit');
+
+        // Fetch data based on reportType
+        let data = [];
+        const match = { companyId: new mongoose.Types.ObjectId(companyId) };
+        if (startDate || endDate) {
+            match.clockIn = {};
+            if (startDate) match.clockIn.$gte = new Date(startDate);
+            if (endDate) match.clockIn.$lte = new Date(endDate);
+        }
+        if (projectId) match.projectId = new mongoose.Types.ObjectId(projectId);
+
+        if (reportType === 'workers' || reportType === 'foremen') {
+            const foremen = await User.find({ companyId, role: 'FOREMAN' }).select('_id');
+            const foremanIds = foremen.map(f => f._id);
+            if (reportType === 'foremen') {
+                match.userId = { $in: foremanIds };
+            }
+
+            data = await TimeLog.aggregate([
+                { $match: match },
+                {
+                    $addFields: {
+                        duration: {
+                            $cond: [
+                                { $and: ["$clockIn", "$clockOut"] },
+                                { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                                0
+                            ]
+                        },
+                        workDay: { $dateToString: { format: "%Y-%m-%d", date: "$clockIn" } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$userId",
+                        totalHours: { $sum: "$duration" },
+                        daysWorked: { $addToSet: "$workDay" }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: '_id',
+                        foreignField: '_id',
+                        as: 'user'
+                    }
+                },
+                { $unwind: '$user' },
+                {
+                    $project: {
+                        fullName: '$user.fullName',
+                        role: '$user.role',
+                        totalHours: { $round: ["$totalHours", 2] },
+                        totalDaysWorked: { $size: "$daysWorked" }
+                    }
+                },
+                { $sort: { fullName: 1 } }
+            ]);
+        } else {
+            data = await TimeLog.aggregate([
+                { $match: match },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'userId',
+                        foreignField: '_id',
+                        as: 'user'
+                    }
+                },
+                { $unwind: '$user' },
+                {
+                    $addFields: {
+                        duration: {
+                            $cond: [
+                                { $and: ["$clockIn", "$clockOut"] },
+                                { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                                0
+                            ]
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$projectId",
+                        totalHours: { $sum: "$duration" },
+                        workerHours: { $sum: { $cond: [{ $eq: ["$user.role", "WORKER"] }, "$duration", 0] } },
+                        foremanHours: { $sum: { $cond: [{ $eq: ["$user.role", "FOREMAN"] }, "$duration", 0] } },
+                        totalEntries: { $sum: 1 }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'projects',
+                        localField: '_id',
+                        foreignField: '_id',
+                        as: 'project'
+                    }
+                },
+                { $unwind: { path: '$project', preserveNullAndEmptyArrays: true } },
+                {
+                    $project: {
+                        projectName: { $ifNull: ["$project.name", "Manual Entries"] },
+                        totalHours: { $round: ["$totalHours", 2] },
+                        workerHours: { $round: ["$workerHours", 2] },
+                        foremanHours: { $round: ["$foremanHours", 2] },
+                        totalAttendanceEntries: "$totalEntries"
+                    }
+                },
+                { $sort: { projectName: 1 } }
+            ]);
+        }
+
+        if (type === 'excel') {
+            let csv = '';
+            if (reportType === 'workers' || reportType === 'foremen') {
+                csv = 'Name,Role,Total Hours,Days Worked\n' +
+                    data.map(r => `"${r.fullName}","${r.role}",${r.totalHours},${r.totalDaysWorked}`).join('\n');
+            } else {
+                csv = 'Project Name,Worker Hours,Foreman Hours,Grand Total Hours,Total Entries\n' +
+                    data.map(r => `"${r.projectName}",${r.workerHours},${r.foremanHours},${r.totalHours},${r.totalAttendanceEntries}`).join('\n');
+            }
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename=Attendance_Report_${reportType}.csv`);
+            return res.status(200).send(csv);
+        }
+
+        if (type === 'pdf') {
+            const doc = new PDFDocument();
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=Attendance_Report_${reportType}.pdf`);
+            doc.pipe(res);
+
+            // Header
+            doc.fontSize(20).text('Attendance & Hours Report', { align: 'center' });
+            doc.moveDown();
+            doc.fontSize(12).text(`Report Type: ${reportType.toUpperCase()}`);
+            doc.text(`Generated on: ${new Date().toLocaleString()}`);
+            if (startDate) doc.text(`From: ${startDate}`);
+            if (endDate) doc.text(`To: ${endDate}`);
+            doc.moveDown();
+
+            // Table Header
+            if (reportType === 'workers' || reportType === 'foremen') {
+                doc.fontSize(10).text('Name', 50, 200);
+                doc.text('Role', 200, 200);
+                doc.text('Total Hours', 300, 200);
+                doc.text('Days Worked', 400, 200);
+                doc.lineWidth(1).moveTo(50, 215).lineTo(550, 215).stroke();
+
+                let y = 230;
+                data.forEach(r => {
+                    doc.text(r.fullName, 50, y);
+                    doc.text(r.role, 200, y);
+                    doc.text(r.totalHours.toString(), 300, y);
+                    doc.text(r.totalDaysWorked.toString(), 400, y);
+                    y += 20;
+                    if (y > 700) { doc.addPage(); y = 50; }
+                });
+            } else {
+                doc.fontSize(10).text('Project Name', 50, 200);
+                doc.text('Worker Hrs', 200, 200);
+                doc.text('Foreman Hrs', 300, 200);
+                doc.text('Grand Total', 400, 200);
+                doc.lineWidth(1).moveTo(50, 215).lineTo(550, 215).stroke();
+
+                let y = 230;
+                data.forEach(r => {
+                    doc.text(r.projectName, 50, y);
+                    doc.text(r.workerHours.toString(), 200, y);
+                    doc.text(r.foremanHours.toString(), 300, y);
+                    doc.text(r.totalHours.toString(), 400, y);
+                    y += 20;
+                    if (y > 700) { doc.addPage(); y = 50; }
+                });
+            }
+
+            doc.end();
+            return;
+        }
+
+        res.status(400).json({ message: 'Invalid export type' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+module.exports = {
+    getProjectReport,
+    getCompanyReport,
+    getDashboardStats,
+    getWorkerAttendanceReport,
+    getForemanAttendanceReport,
+    getProjectAttendanceReport,
+    exportAttendanceReport
+};
