@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const statusHistorySchema = new mongoose.Schema({
+    status: { type: String },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now },
+    note: { type: String }
+}, { _id: false });
+
 const taskSchema = new mongoose.Schema({
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -17,15 +24,32 @@ const taskSchema = new mongoose.Schema({
     },
     title: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     description: {
-        type: String
+        type: String,
+        default: ''
     },
+    // Primary assignment (single user)
     assignedTo: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     }],
+    // Role type of the assigned user(s)
+    assignedRoleType: {
+        type: String,
+        enum: ['WORKER', 'FOREMAN', 'SUBCONTRACTOR', 'PM', 'ENGINEER', ''],
+        default: ''
+    },
+    // Who assigned this task
+    assignedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    startDate: {
+        type: Date
+    },
     dueDate: {
         type: Date
     },
@@ -51,7 +75,9 @@ const taskSchema = new mongoose.Schema({
     },
     completionOTP: {
         type: String
-    }
+    },
+    // Audit trail for status changes
+    statusHistory: [statusHistorySchema]
 }, {
     timestamps: true
 });
