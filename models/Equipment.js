@@ -40,6 +40,10 @@ const equipmentSchema = new mongoose.Schema({
     lastServiceDate: {
         type: Date
     },
+    location: {
+        type: String,
+        default: 'Warehouse'
+    },
     notes: {
         type: String,
         default: ''

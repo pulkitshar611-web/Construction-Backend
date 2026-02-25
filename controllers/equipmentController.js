@@ -7,7 +7,16 @@ const cloudinary = require('cloudinary').v2;
 // @access  Private
 const getEquipment = async (req, res, next) => {
     try {
-        const equipment = await Equipment.find({ companyId: req.user.companyId })
+        let query = { companyId: req.user.companyId };
+
+        // Role-Based Filtering
+        if (req.user.role === 'SUBCONTRACTOR') {
+            // Only show equipment that is currently assigned to a job
+            // In a real scenario, we'd further filter by jobs the subcontractor is on
+            query.assignedJob = { $ne: null };
+        }
+
+        const equipment = await Equipment.find(query)
             .populate({
                 path: 'assignedJob',
                 select: 'name status projectId',
