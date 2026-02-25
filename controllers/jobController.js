@@ -1,5 +1,6 @@
 const Job = require('../models/Job');
 const Project = require('../models/Project');
+const { dispatchNotification } = require('../utils/notificationHelper');
 
 // Helper to update project stats (Disabled automatic progress/status as per manual control requirement)
 const updateProjectStats = async (projectId) => {
@@ -100,6 +101,36 @@ const createJob = async (req, res) => {
         // Sync project stats
         await updateProjectStats(job.projectId);
 
+        // Sync Chat Participants
+        try {
+            const { syncProjectParticipants } = require('./chatController');
+            await syncProjectParticipants(job.projectId);
+
+            // Notify Foreman
+            if (job.foremanId) {
+                await dispatchNotification(req, {
+                    userId: job.foremanId,
+                    title: 'New Job Assigned',
+                    message: `You have been assigned as Foreman for job: "${job.name}"`,
+                    link: '/projects',
+                    type: 'project'
+                });
+            }
+
+            // Notify Workers
+            for (const workerId of (job.assignedWorkers || [])) {
+                await dispatchNotification(req, {
+                    userId: workerId,
+                    title: 'New Job Assignment',
+                    message: `You have been assigned to job: "${job.name}"`,
+                    link: '/projects',
+                    type: 'project'
+                });
+            }
+        } catch (syncError) {
+            console.error('Job Create: Failed to sync chat participants/notifications:', syncError);
+        }
+
         const populated = await job.populate('foremanId', 'fullName role');
         res.status(201).json(populated);
     } catch (err) {
@@ -125,6 +156,36 @@ const updateJob = async (req, res) => {
 
         // Sync project stats
         await updateProjectStats(job.projectId);
+
+        // Sync Chat Participants
+        try {
+            const { syncProjectParticipants } = require('./chatController');
+            await syncProjectParticipants(job.projectId);
+
+            // Notify Foreman (if changed or set)
+            if (job.foremanId) {
+                await dispatchNotification(req, {
+                    userId: job.foremanId,
+                    title: 'Job Updated',
+                    message: `Assignments updated for job: "${job.name}"`,
+                    link: '/projects',
+                    type: 'project'
+                });
+            }
+
+            // Notify Workers
+            for (const workerId of (job.assignedWorkers || [])) {
+                await dispatchNotification(req, {
+                    userId: workerId,
+                    title: 'Job Updated',
+                    message: `Assignments updated for job: "${job.name}"`,
+                    link: '/projects',
+                    type: 'project'
+                });
+            }
+        } catch (syncError) {
+            console.error('Job Update: Failed to sync chat participants/notifications:', syncError);
+        }
 
         const populated = await Job.findById(job._id)
             .populate('foremanId', 'fullName role')

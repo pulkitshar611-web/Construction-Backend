@@ -98,11 +98,44 @@ app.get('/', (req, res) => {
 // Online User Tracking
 const onlineUsers = new Map();
 
-// Socket.io Connection
-io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
+const jwt = require('jsonwebtoken');
 
-    // Register User
+// Socket.io JWT Authentication Middleware
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token || socket.handshake.query.token;
+    if (!token) {
+        return next(new Error('Authentication error: Token missing'));
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        socket.user = decoded; // Contains id, role, etc.
+        next();
+    } catch (err) {
+        return next(new Error('Authentication error: Invalid token'));
+    }
+});
+
+// Socket.io Connection
+io.on('connection', async (socket) => {
+    console.log('New client connected:', socket.id, 'User:', socket.user.id);
+
+    // Join personal room
+    socket.join(socket.user.id);
+
+    // Join all chat rooms the user is a participant of
+    try {
+        const ChatParticipant = require('./models/ChatParticipant');
+        const participants = await ChatParticipant.find({ userId: socket.user.id });
+        participants.forEach(p => {
+            socket.join(p.roomId.toString());
+            console.log(`User ${socket.user.id} joined room ${p.roomId}`);
+        });
+    } catch (err) {
+        console.error('Error joining rooms on connect:', err);
+    }
+
+    // Register User (Keep for legacy or extra metadata if needed, but token is primary)
     socket.on('register_user', (userData) => {
         if (userData && userData._id) {
             onlineUsers.set(socket.id, {
@@ -113,37 +146,17 @@ io.on('connection', (socket) => {
                 lat: userData.lat || null,
                 lng: userData.lng || null
             });
-            // Join personal room for private messages
-            socket.join(userData._id);
 
             // Update every client with new online count
             io.emit('online_users_count', onlineUsers.size);
             io.emit('user_status_change', { userId: userData._id, status: 'online' });
-            console.log(`User registered: ${userData.fullName} (${onlineUsers.size} online)`);
         }
     });
 
-    // Update Location
-    socket.on('update_location', (data) => {
-        const user = onlineUsers.get(socket.id);
-        if (user && data.lat && data.lng) {
-            user.lat = data.lat;
-            user.lng = data.lng;
-            // Broadcast location to everyone else in the same company
-            socket.broadcast.emit('location_update', {
-                userId: user.userId,
-                fullName: user.fullName,
-                role: user.role,
-                lat: data.lat,
-                lng: data.lng,
-                companyId: user.companyId
-            });
-        }
-    });
-
-    socket.on('join_project', (projectId) => {
-        socket.join(projectId);
-        console.log(`User joined project room: ${projectId}`);
+    // Handle room joining dynamically (e.g. when a new room is created)
+    socket.on('join_room', (roomId) => {
+        socket.join(roomId);
+        console.log(`User ${socket.user.id} joined room manually: ${roomId}`);
     });
 
     socket.on('disconnect', () => {

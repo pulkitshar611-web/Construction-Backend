@@ -1,28 +1,4 @@
-const Task = require('../models/Task');
-const Notification = require('../models/Notification');
-const AuditLog = require('../models/AuditLog');
-const Job = require('../models/Job');
-
-// Helper: dispatch notification via socket.io + DB
-const dispatchNotification = async (req, { userId, title, message, link }) => {
-    try {
-        const notification = await Notification.create({
-            companyId: req.user.companyId,
-            userId,
-            title,
-            message,
-            type: 'task',
-            link: link || '/company-admin/tasks'
-        });
-        // Emit to user's personal socket room
-        const io = req.app.get('io');
-        if (io) {
-            io.to(userId.toString()).emit('new_notification', notification);
-        }
-    } catch (err) {
-        console.error('Notification dispatch failed:', err.message);
-    }
-};
+const { dispatchNotification } = require('../utils/notificationHelper');
 
 // @desc    Get tasks (role-based)
 // @route   GET /api/tasks
@@ -157,7 +133,8 @@ const createTask = async (req, res, next) => {
                 userId: uid,
                 title: 'New Task Assigned',
                 message: `You have been assigned: "${title}" by ${req.user.fullName}`,
-                link: '/company-admin/tasks'
+                link: '/tasks',
+                type: 'task'
             });
         }
 
@@ -169,6 +146,14 @@ const createTask = async (req, res, next) => {
             details: `Created task "${title}"`,
             metadata: { taskId: task._id, projectId, assignedTo: assignedToArr }
         });
+
+        // Sync Chat Participants
+        try {
+            const { syncProjectParticipants } = require('./chatController');
+            await syncProjectParticipants(projectId);
+        } catch (syncError) {
+            console.error('Task Create: Failed to sync chat participants:', syncError);
+        }
 
         const populated = await Task.findById(task._id)
             .populate('projectId', 'name')
@@ -215,7 +200,8 @@ const assignTask = async (req, res, next) => {
                 userId: uid,
                 title: 'Task Assigned to You',
                 message: `"${task.title}" has been assigned to you by ${req.user.fullName}`,
-                link: '/company-admin/tasks'
+                link: '/tasks',
+                type: 'task'
             });
         }
 
@@ -226,6 +212,14 @@ const assignTask = async (req, res, next) => {
             details: `Assigned task "${task.title}" to ${assignedToArr.join(', ')}`,
             metadata: { taskId: task._id, assignedTo: assignedToArr }
         });
+
+        // Sync Chat Participants
+        try {
+            const { syncProjectParticipants } = require('./chatController');
+            await syncProjectParticipants(task.projectId);
+        } catch (syncError) {
+            console.error('Task Assign: Failed to sync chat participants:', syncError);
+        }
 
         const populated = await Task.findById(task._id)
             .populate('projectId', 'name')
@@ -291,6 +285,16 @@ const updateTask = async (req, res, next) => {
         }
 
         await task.save();
+
+        // Sync Chat Participants if assignedTo changed
+        if (req.body.assignedTo) {
+            try {
+                const { syncProjectParticipants } = require('./chatController');
+                await syncProjectParticipants(task.projectId);
+            } catch (syncError) {
+                console.error('Task Update: Failed to sync chat participants:', syncError);
+            }
+        }
 
         await AuditLog.create({
             userId: req.user._id,

@@ -130,6 +130,25 @@ const createProject = async (req, res, next) => {
             createdBy: req.user._id
         });
 
+        // CREATE CHAT ROOM FOR PROJECT
+        try {
+            const ChatRoom = require('../models/ChatRoom');
+            const { syncProjectParticipants } = require('./chatController');
+
+            await ChatRoom.create({
+                companyId: req.user.companyId,
+                projectId: project._id,
+                roomType: 'PROJECT_GROUP',
+                name: project.name,
+                isGroup: true
+            });
+
+            // Initial sync
+            await syncProjectParticipants(project._id);
+        } catch (chatError) {
+            console.error('Failed to create/sync chat room for project:', chatError);
+        }
+
         const populatedProject = await Project.findById(project._id)
             .populate('clientId', 'fullName email')
             .populate('createdBy', 'fullName')
@@ -164,6 +183,12 @@ const updateProject = async (req, res, next) => {
             runValidators: true
         }).populate('pmId', 'fullName email')
             .populate('createdBy', 'fullName');
+
+        // Sync chat participants if PM or Client changed
+        if (req.body.pmId || req.body.clientId) {
+            const { syncProjectParticipants } = require('./chatController');
+            await syncProjectParticipants(updatedProject._id);
+        }
 
         res.json(updatedProject);
     } catch (error) {
