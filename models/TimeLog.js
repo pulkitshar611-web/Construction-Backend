@@ -30,6 +30,16 @@ const timeLogSchema = new mongoose.Schema({
         latitude: Number,
         longitude: Number
     },
+    clockInLatitude: Number,
+    clockInLongitude: Number,
+    clockInAccuracy: Number,
+    clockOutLatitude: Number,
+    clockOutLongitude: Number,
+    clockOutAccuracy: Number,
+    isOutsideGeofence: {
+        type: Boolean,
+        default: false
+    },
     geofenceStatus: {
         type: String,
         enum: ['inside', 'outside', 'unknown'],

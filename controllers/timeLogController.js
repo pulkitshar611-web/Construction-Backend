@@ -22,8 +22,20 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // @access  Private
 const clockIn = async (req, res, next) => {
     try {
-        const { projectId, latitude, longitude, deviceInfo, userId } = req.body;
+        const { projectId, latitude, longitude, accuracy, deviceInfo, userId } = req.body;
         const targetUserId = userId || req.user._id;
+
+        // Validation: Mandatory GPS
+        if (!latitude || !longitude) {
+            res.status(400);
+            throw new Error('Location access is required to clock in. Please enable GPS.');
+        }
+
+        // Validation: Accuracy must be reasonable (e.g., < 50m)
+        if (accuracy && accuracy > 50) {
+            res.status(400);
+            throw new Error('GPS accuracy too low ( > 50m). Please try again in an area with better signal.');
+        }
 
         // Check if already clocked in
         const activeLog = await TimeLog.findOne({
@@ -37,15 +49,27 @@ const clockIn = async (req, res, next) => {
         }
 
         let geofenceStatus = 'unknown';
+        let isOutsideGeofence = false;
 
         if (projectId && latitude && longitude) {
             const project = await Project.findById(projectId);
-            if (project && project.location && project.location.latitude) {
-                const distance = calculateDistance(
-                    latitude, longitude,
-                    project.location.latitude, project.location.longitude
-                );
-                geofenceStatus = distance <= (project.geofenceRadius || 200) ? 'inside' : 'outside';
+            if (project) {
+                // Use site coordinates if available, otherwise fallback to location.latitude
+                const siteLat = project.siteLatitude || project.location?.latitude;
+                const siteLon = project.siteLongitude || project.location?.longitude;
+                const radius = project.allowedRadiusMeters || project.geofenceRadius || 100;
+
+                if (siteLat && siteLon) {
+                    const distance = calculateDistance(latitude, longitude, siteLat, siteLon);
+                    isOutsideGeofence = distance > radius;
+                    geofenceStatus = isOutsideGeofence ? 'outside' : 'inside';
+
+                    // Block if strict geofence is enabled
+                    if (isOutsideGeofence && project.strictGeofence) {
+                        res.status(403);
+                        throw new Error(`Clock-in blocked: You are ${Math.round(distance - radius)}m outside the allowed site radius.`);
+                    }
+                }
             }
         }
 
@@ -54,12 +78,16 @@ const clockIn = async (req, res, next) => {
             userId: targetUserId,
             projectId,
             clockIn: new Date(),
-            gpsIn: { latitude, longitude },
+            gpsIn: { latitude, longitude }, // compatibility
+            clockInLatitude: latitude,
+            clockInLongitude: longitude,
+            clockInAccuracy: accuracy,
             geofenceStatus,
+            isOutsideGeofence,
             deviceInfo
         });
 
-        // Emit socket event for real-time updates
+        // Emit socket event
         const io = req.app.get('io');
         if (io) {
             io.emit('attendance_update', {
@@ -75,13 +103,16 @@ const clockIn = async (req, res, next) => {
     }
 };
 
-// @desc    Clock Out
-// @route   POST /api/timelogs/clock-out
-// @access  Private
 const clockOut = async (req, res, next) => {
     try {
-        const { latitude, longitude, userId } = req.body;
+        const { latitude, longitude, accuracy, userId } = req.body;
         const targetUserId = userId || req.user._id;
+
+        // Validation: Mandatory GPS
+        if (!latitude || !longitude) {
+            res.status(400);
+            throw new Error('Location access is required to clock out. Please enable GPS.');
+        }
 
         const log = await TimeLog.findOne({
             userId: targetUserId,
@@ -93,11 +124,38 @@ const clockOut = async (req, res, next) => {
             throw new Error('User not clocked in');
         }
 
+        // Potential geofence check for clock-out if required
+        if (log.projectId && latitude && longitude) {
+            const project = await Project.findById(log.projectId);
+            if (project) {
+                const siteLat = project.siteLatitude || project.location?.latitude;
+                const siteLon = project.siteLongitude || project.location?.longitude;
+                const radius = project.allowedRadiusMeters || project.geofenceRadius || 100;
+
+                if (siteLat && siteLon) {
+                    const distance = calculateDistance(latitude, longitude, siteLat, siteLon);
+                    // We update the flag if they clock out outside as well, or just record it
+                    if (distance > radius) {
+                        log.isOutsideGeofence = true;
+                        log.geofenceStatus = 'outside';
+
+                        if (project.strictGeofence) {
+                            res.status(403);
+                            throw new Error(`Clock-out blocked: You must be within the project site to clock out.`);
+                        }
+                    }
+                }
+            }
+        }
+
         log.clockOut = new Date();
-        log.gpsOut = { latitude, longitude };
+        log.gpsOut = { latitude, longitude }; // compatibility
+        log.clockOutLatitude = latitude;
+        log.clockOutLongitude = longitude;
+        log.clockOutAccuracy = accuracy;
         await log.save();
 
-        // Emit socket event for real-time updates
+        // Emit socket event
         const io = req.app.get('io');
         if (io) {
             io.emit('attendance_update', {

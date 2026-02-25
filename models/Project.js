@@ -40,9 +40,19 @@ const projectSchema = new mongoose.Schema({
         latitude: Number,
         longitude: Number
     },
+    siteLatitude: Number,
+    siteLongitude: Number,
+    allowedRadiusMeters: {
+        type: Number,
+        default: 100
+    },
     geofenceRadius: {
         type: Number,
         default: 200 // in meters
+    },
+    strictGeofence: {
+        type: Boolean,
+        default: false
     },
     image: {
         type: String // Base64 or URL
