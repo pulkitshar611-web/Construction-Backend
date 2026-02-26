@@ -601,6 +601,8 @@ const getForemanAttendanceReport = async (req, res, next) => {
             {
                 $project: {
                     fullName: '$user.fullName',
+                    email: '$user.email',
+                    role: '$user.role',
                     totalHours: { $round: ["$overallHours", 2] },
                     totalDaysWorked: {
                         $size: {

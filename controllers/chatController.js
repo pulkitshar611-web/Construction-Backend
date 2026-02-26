@@ -99,6 +99,11 @@ const getRoomMessages = async (req, res, next) => {
         const { roomId } = req.params;
         const { _id } = req.user;
 
+        if (!mongoose.Types.ObjectId.isValid(roomId)) {
+            res.status(400);
+            return next(new Error('Invalid Room ID'));
+        }
+
         // Verify participation
         const participant = await ChatParticipant.findOne({ roomId, userId: _id });
         if (!participant) {
@@ -203,6 +208,11 @@ const markAsRead = async (req, res, next) => {
     try {
         const { roomId } = req.params;
         const { _id } = req.user;
+
+        if (!mongoose.Types.ObjectId.isValid(roomId)) {
+            res.status(400);
+            return next(new Error('Invalid Room ID'));
+        }
 
         const participant = await ChatParticipant.findOneAndUpdate(
             { roomId, userId: _id },
