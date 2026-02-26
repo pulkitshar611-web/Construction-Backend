@@ -188,6 +188,42 @@ const updateUserOverrides = async (req, res, next) => {
     }
 };
 
+// Helper function to get permissions for a user
+const fetchUserPermissions = async (user) => {
+    let roleId = user.roleId?._id || user.roleId;
+
+    if (!roleId) {
+        const roleDoc = await Role.findOne({ name: user.role });
+        if (roleDoc) roleId = roleDoc._id;
+    }
+
+    // Parallel fetch for efficiency: Fetch all role-based perms and all user overrides
+    const [rolePermDocs, overrideDocs] = await Promise.all([
+        roleId ? RolePermission.find({ roleId }).populate('permissionId') : [],
+        UserPermission.find({ userId: user._id }).populate('permissionId')
+    ]);
+
+    // Create a set of keys allowed by the role
+    const permissions = new Set(
+        rolePermDocs
+            .filter(rp => rp.permissionId)
+            .map(rp => rp.permissionId.key)
+    );
+
+    // Apply overrides: Add if allowed, remove if explicitly denied
+    overrideDocs.forEach(o => {
+        if (o.permissionId) {
+            if (o.isAllowed) {
+                permissions.add(o.permissionId.key);
+            } else {
+                permissions.delete(o.permissionId.key);
+            }
+        }
+    });
+
+    return Array.from(permissions);
+};
+
 // @desc    Get permissions for current user
 // @route   GET /api/roles/my-permissions
 // @access  Private
@@ -197,41 +233,11 @@ const getMyPermissions = async (req, res, next) => {
             return res.json({ role: 'SUPER_ADMIN', permissions: ['ALL'] });
         }
 
-        const userId = req.user._id;
-        let roleId = req.user.roleId;
-
-        if (!roleId) {
-            const roleDoc = await Role.findOne({ name: req.user.role });
-            if (roleDoc) roleId = roleDoc._id;
-        }
-
-        // Parallel fetch for efficiency: Fetch all role-based perms and all user overrides
-        const [rolePermDocs, overrideDocs] = await Promise.all([
-            roleId ? RolePermission.find({ roleId }).populate('permissionId') : [],
-            UserPermission.find({ userId }).populate('permissionId')
-        ]);
-
-        // Create a set of keys allowed by the role
-        const permissions = new Set(
-            rolePermDocs
-                .filter(rp => rp.permissionId)
-                .map(rp => rp.permissionId.key)
-        );
-
-        // Apply overrides: Add if allowed, remove if explicitly denied
-        overrideDocs.forEach(o => {
-            if (o.permissionId) {
-                if (o.isAllowed) {
-                    permissions.add(o.permissionId.key);
-                } else {
-                    permissions.delete(o.permissionId.key);
-                }
-            }
-        });
+        const permissions = await fetchUserPermissions(req.user);
 
         res.json({
             role: req.user.role,
-            permissions: Array.from(permissions)
+            permissions
         });
     } catch (error) {
         next(error);
@@ -245,5 +251,6 @@ module.exports = {
     updateUserOverrides,
     getMyPermissions,
     updateRolePermissions,
-    bulkUpdateRolePermissions
+    bulkUpdateRolePermissions,
+    fetchUserPermissions
 };

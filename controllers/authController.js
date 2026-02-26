@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Company = require('../models/Company');
 const jwt = require('jsonwebtoken');
+const { fetchUserPermissions } = require('./roleController');
 
 // @desc    Register a new company and owner
 // @route   POST /api/auth/register-company
@@ -94,6 +95,8 @@ const loginUser = async (req, res, next) => {
                 }
             }
 
+            const permissions = await fetchUserPermissions(user);
+
             res.json({
                 _id: user._id,
                 fullName: user.fullName,
@@ -101,6 +104,7 @@ const loginUser = async (req, res, next) => {
                 role: user.role,
                 companyId: user.companyId,
                 token: generateToken(user._id, user.role, user.companyId),
+                permissions
             });
         } else {
             res.status(401);
