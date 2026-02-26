@@ -11,15 +11,22 @@ const getRoles = async (req, res, next) => {
     try {
         const roles = await Role.find().sort({ name: 1 });
 
-        // Fetch permissions for each role
-        const rolesWithPerms = await Promise.all(roles.map(async (role) => {
-            const rolePermissionDocs = await RolePermission.find({ roleId: role._id }).populate('permissionId');
-            return {
-                _id: role._id,
-                name: role.name,
-                description: role.description,
-                permissions: rolePermissionDocs.map(rp => rp.permissionId.key)
-            };
+        // Fetch all role permissions in one go
+        const roleIds = roles.map(r => r._id);
+        const allRolePerms = await RolePermission.find({ roleId: { $in: roleIds } }).populate('permissionId');
+
+        // Group by roleId
+        const permsByRole = allRolePerms.reduce((acc, rp) => {
+            if (!acc[rp.roleId]) acc[rp.roleId] = [];
+            if (rp.permissionId) acc[rp.roleId].push(rp.permissionId.key);
+            return acc;
+        }, {});
+
+        const rolesWithPerms = roles.map(role => ({
+            _id: role._id,
+            name: role.name,
+            description: role.description,
+            permissions: permsByRole[role._id] || []
         }));
 
         res.json(rolesWithPerms);
@@ -127,30 +134,30 @@ const getUserPermissions = async (req, res, next) => {
             throw new Error('User not found');
         }
 
-        // Get Permissions from Role
-        let rolePerms = [];
-        if (user.roleId) {
-            const rolePermissionDocs = await RolePermission.find({ roleId: user.roleId }).populate('permissionId');
-            rolePerms = rolePermissionDocs.map(rp => rp.permissionId.key);
-        } else {
-            // Fallback for users without roleId (using string role)
+        let roleId = user.roleId?._id || user.roleId; // Handle both populated and unpopulated
+        if (!roleId) {
             const roleDoc = await Role.findOne({ name: user.role });
-            if (roleDoc) {
-                const rolePermissionDocs = await RolePermission.find({ roleId: roleDoc._id }).populate('permissionId');
-                rolePerms = rolePermissionDocs.map(rp => rp.permissionId.key);
-            }
+            if (roleDoc) roleId = roleDoc._id;
         }
 
-        // Get Overrides
-        const overrides = await UserPermission.find({ userId }).populate('permissionId');
+        // Parallel fetch for efficiency
+        const [rolePermDocs, overrideDocs] = await Promise.all([
+            roleId ? RolePermission.find({ roleId }).populate('permissionId') : [],
+            UserPermission.find({ userId }).populate('permissionId')
+        ]);
 
-        res.json({
-            rolePermissions: rolePerms,
-            overrides: overrides.map(o => ({
+        const rolePermissions = rolePermDocs
+            .filter(rp => rp.permissionId)
+            .map(rp => rp.permissionId.key);
+
+        const overrides = overrideDocs
+            .filter(o => o.permissionId)
+            .map(o => ({
                 key: o.permissionId.key,
                 isAllowed: o.isAllowed
-            }))
-        });
+            }));
+
+        res.json({ rolePermissions, overrides });
     } catch (error) {
         next(error);
     }
@@ -191,35 +198,40 @@ const getMyPermissions = async (req, res, next) => {
         }
 
         const userId = req.user._id;
+        let roleId = req.user.roleId;
 
-        // This is a bit redundant with the middleware logic but good for frontend to have a list
-        const allPermsDocs = await Permission.find();
-        const finalPermissions = [];
-
-        for (const perm of allPermsDocs) {
-            // Check override
-            const override = await UserPermission.findOne({ userId, permissionId: perm._id });
-            if (override) {
-                if (override.isAllowed) finalPermissions.push(perm.key);
-                continue;
-            }
-
-            // Check role
-            let roleId = req.user.roleId;
-            if (!roleId) {
-                const roleDoc = await Role.findOne({ name: req.user.role });
-                if (roleDoc) roleId = roleDoc._id;
-            }
-
-            if (roleId) {
-                const rolePerm = await RolePermission.findOne({ roleId, permissionId: perm._id });
-                if (rolePerm) finalPermissions.push(perm.key);
-            }
+        if (!roleId) {
+            const roleDoc = await Role.findOne({ name: req.user.role });
+            if (roleDoc) roleId = roleDoc._id;
         }
+
+        // Parallel fetch for efficiency: Fetch all role-based perms and all user overrides
+        const [rolePermDocs, overrideDocs] = await Promise.all([
+            roleId ? RolePermission.find({ roleId }).populate('permissionId') : [],
+            UserPermission.find({ userId }).populate('permissionId')
+        ]);
+
+        // Create a set of keys allowed by the role
+        const permissions = new Set(
+            rolePermDocs
+                .filter(rp => rp.permissionId)
+                .map(rp => rp.permissionId.key)
+        );
+
+        // Apply overrides: Add if allowed, remove if explicitly denied
+        overrideDocs.forEach(o => {
+            if (o.permissionId) {
+                if (o.isAllowed) {
+                    permissions.add(o.permissionId.key);
+                } else {
+                    permissions.delete(o.permissionId.key);
+                }
+            }
+        });
 
         res.json({
             role: req.user.role,
-            permissions: finalPermissions
+            permissions: Array.from(permissions)
         });
     } catch (error) {
         next(error);
