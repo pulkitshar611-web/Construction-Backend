@@ -22,7 +22,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // @access  Private
 const clockIn = async (req, res, next) => {
     try {
-        const { projectId, latitude, longitude, accuracy, deviceInfo, userId } = req.body;
+        const { projectId, jobId, taskId, latitude, longitude, accuracy, deviceInfo, userId } = req.body;
         const targetUserId = userId || req.user._id;
 
         // Validation: Mandatory GPS
@@ -77,6 +77,8 @@ const clockIn = async (req, res, next) => {
             companyId: req.user.companyId,
             userId: targetUserId,
             projectId,
+            jobId,
+            taskId,
             clockIn: new Date(),
             gpsIn: { latitude, longitude }, // compatibility
             clockInLatitude: latitude,
@@ -87,6 +89,15 @@ const clockIn = async (req, res, next) => {
             deviceInfo
         });
 
+        // If taskId is provided, update task status to 'in_progress'
+        if (taskId) {
+            const JobTask = require('../models/JobTask');
+            await JobTask.findOneAndUpdate(
+                { _id: taskId, status: 'pending' },
+                { $set: { status: 'in_progress' } }
+            );
+        }
+
         // Emit socket event
         const io = req.app.get('io');
         if (io) {
@@ -95,6 +106,10 @@ const clockIn = async (req, res, next) => {
                 userId: targetUserId,
                 log: await TimeLog.findById(log._id).populate('userId', 'fullName role avatar').populate('projectId', 'name')
             });
+            // Emit task update event to refresh UI without reload
+            if (taskId) {
+                io.emit('task_update', { taskId, status: 'in_progress' });
+            }
         }
 
         res.status(201).json(log);
@@ -184,6 +199,8 @@ const getTimeLogs = async (req, res, next) => {
         const logs = await TimeLog.find(query)
             .populate('userId', 'fullName email')
             .populate('projectId', 'name')
+            .populate('jobId', 'name')
+            .populate('taskId', 'title')
             .sort({ clockIn: -1 });
 
         res.json(logs);

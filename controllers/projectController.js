@@ -214,6 +214,19 @@ const deleteProject = async (req, res, next) => {
             throw new Error('Not authorized to delete this project');
         }
 
+        const Job = require('../models/Job');
+        const JobTask = require('../models/JobTask');
+        const TimeLog = require('../models/TimeLog');
+
+        // Find jobs under this project
+        const jobs = await Job.find({ projectId: project._id });
+        const jobIds = jobs.map(j => j._id);
+
+        // Delete dependencies
+        await TimeLog.deleteMany({ projectId: project._id });
+        await JobTask.deleteMany({ jobId: { $in: jobIds } });
+        await Job.deleteMany({ projectId: project._id });
+
         await Project.findByIdAndDelete(req.params.id);
         res.json({ message: 'Project removed' });
     } catch (error) {

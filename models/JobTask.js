@@ -28,6 +28,11 @@ const jobTaskSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    assignedForeman: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        index: true
+    },
     priority: {
         type: String,
         enum: ['low', 'medium', 'high'],

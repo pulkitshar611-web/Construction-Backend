@@ -15,6 +15,14 @@ const timeLogSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Project'
     },
+    jobId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Job'
+    },
+    taskId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'JobTask'
+    },
     clockIn: {
         type: Date,
         required: true

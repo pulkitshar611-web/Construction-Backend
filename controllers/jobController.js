@@ -44,9 +44,23 @@ const getJobs = async (req, res) => {
                 { foremanId: req.user._id }
             ];
         } else if (req.user.role === 'FOREMAN') {
-            filter.foremanId = req.user._id;
+            const JobTask = require('../models/JobTask');
+            const userTasks = await JobTask.find({
+                $or: [{ assignedTo: req.user._id }, { assignedForeman: req.user._id }]
+            }).select('jobId');
+            const taskJobIds = userTasks.map(t => t.jobId);
+            filter.$or = [
+                { foremanId: req.user._id },
+                { _id: { $in: taskJobIds } }
+            ];
         } else if (req.user.role === 'WORKER') {
-            filter.assignedWorkers = { $in: [req.user._id] };
+            const JobTask = require('../models/JobTask');
+            const userTasks = await JobTask.find({ assignedTo: req.user._id }).select('jobId');
+            const taskJobIds = userTasks.map(t => t.jobId);
+            filter.$or = [
+                { assignedWorkers: { $in: [req.user._id] } },
+                { _id: { $in: taskJobIds } }
+            ];
         }
 
         const jobs = await Job.find(filter)
@@ -317,6 +331,11 @@ const deleteJob = async (req, res) => {
         if (!job) return res.status(404).json({ message: 'Job not found' });
 
         const projectId = job.projectId;
+        const JobTask = require('../models/JobTask');
+        const TimeLog = require('../models/TimeLog');
+
+        await JobTask.deleteMany({ jobId: req.params.id });
+        await TimeLog.deleteMany({ jobId: req.params.id });
         await Job.findByIdAndDelete(req.params.id);
 
         // Sync project stats
@@ -340,9 +359,21 @@ const getJobFullHistory = async (req, res) => {
         if (!job) return res.status(404).json({ message: 'Job not found' });
 
         // 1. Fetch Daily Logs
-        const dailyLogs = await JobTimeLog.find({ jobId })
-            .populate('workerId', 'fullName')
-            .sort({ workDate: -1, checkIn: -1 });
+        const TimeLog = require('../models/TimeLog');
+        const rawTimeLogs = await TimeLog.find({ jobId })
+            .populate('userId', 'fullName')
+            .sort({ clockIn: -1 });
+
+        const dailyLogs = rawTimeLogs.map(log => {
+            const duration = log.clockOut ? ((new Date(log.clockOut) - new Date(log.clockIn)) / 3600000) : 0;
+            return {
+                workerId: log.userId,
+                workDate: log.clockIn,
+                checkIn: log.clockIn,
+                checkOut: log.clockOut,
+                totalHours: duration
+            };
+        });
 
         // 2. Fetch Activity Logs
         const activityLogs = await JobActivityLog.find({ jobId })
@@ -351,13 +382,24 @@ const getJobFullHistory = async (req, res) => {
 
         // 3. Aggregate Worker Summary
         // We'll calculate totals from time logs
-        const workerStats = await JobTimeLog.aggregate([
+        const workerStats = await TimeLog.aggregate([
             { $match: { jobId: new mongoose.Types.ObjectId(jobId) } },
             {
+                $addFields: {
+                    durationHrs: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    }
+                }
+            },
+            {
                 $group: {
-                    _id: '$workerId',
-                    totalHours: { $sum: '$totalHours' },
-                    totalDays: { $addToSet: { $dateToString: { format: "%Y-%m-%d", date: "$workDate" } } }
+                    _id: '$userId',
+                    totalHours: { $sum: '$durationHrs' },
+                    totalDays: { $addToSet: { $dateToString: { format: "%Y-%m-%d", date: "$clockIn" } } }
                 }
             },
             {
@@ -365,7 +407,7 @@ const getJobFullHistory = async (req, res) => {
                     workerId: '$_id',
                     totalHours: 1,
                     totalDays: { $size: '$totalDays' },
-                    avgHours: { $cond: [{ $eq: ['$totalDays', 0] }, 0, { $divide: ['$totalHours', { $size: '$totalDays' }] }] }
+                    avgHours: { $cond: [{ $eq: [{ $size: '$totalDays' }, 0] }, 0, { $divide: ['$totalHours', { $size: '$totalDays' }] }] }
                 }
             }
         ]);
@@ -380,11 +422,51 @@ const getJobFullHistory = async (req, res) => {
             };
         }));
 
+        // 4. Fetch Actual TimeLogs for this job (from comprehensive TimeLog model instead of basic JobTimeLog)
+        const actualTimeLogs = await TimeLog.aggregate([
+            { $match: { jobId: new mongoose.Types.ObjectId(jobId) } },
+            {
+                $addFields: {
+                    durationHrs: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    }
+                }
+            },
+            {
+                $group: {
+                    _id: "$taskId",
+                    totalTaskHours: { $sum: "$durationHrs" }
+                }
+            },
+            {
+                $lookup: {
+                    from: "jobtasks",
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "taskDetails"
+                }
+            },
+            { $unwind: { path: "$taskDetails", preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    taskId: "$_id",
+                    taskName: "$taskDetails.title",
+                    totalTaskHours: 1
+                }
+            }
+        ]);
+
+
         res.json({
             job_details: job,
             worker_summary: populatedWorkerStats,
             daily_logs: dailyLogs,
-            activity_logs: activityLogs
+            activity_logs: activityLogs,
+            task_summary: actualTimeLogs
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -401,74 +483,163 @@ const generateJobHistoryPDF = async (req, res) => {
 
         if (!job) return res.status(404).json({ message: 'Job not found' });
 
-        const dailyLogs = await JobTimeLog.find({ jobId })
-            .populate('workerId', 'fullName')
-            .sort({ workDate: -1 });
+        const TimeLog = require('../models/TimeLog');
+        const rawTimeLogsPdf = await TimeLog.find({ jobId })
+            .populate('userId', 'fullName')
+            .sort({ clockIn: -1 });
+
+        const dailyLogs = rawTimeLogsPdf.map(log => {
+            const duration = log.clockOut ? ((new Date(log.clockOut) - new Date(log.clockIn)) / 3600000) : 0;
+            return {
+                workerId: log.userId,
+                workDate: log.clockIn,
+                checkIn: log.clockIn,
+                checkOut: log.clockOut,
+                totalHours: duration
+            };
+        });
 
         const activityLogs = await JobActivityLog.find({ jobId })
             .populate('createdBy', 'fullName')
             .sort({ createdAt: -1 });
 
         const PDFDocument = require('pdfkit');
+        // Define standard margins
         const doc = new PDFDocument({ margin: 50, size: 'A4' });
 
-        let filename = `${job.name}_History.pdf`;
+        let filename = `${job.name}_Report.pdf`;
         filename = encodeURIComponent(filename);
-        res.setHeader('Content-disposition', 'attachment; filename="' + filename + '"');
+        res.setHeader('Content-disposition', `attachment; filename="${filename}"`);
         res.setHeader('Content-type', 'application/pdf');
 
-        // Header
-        doc.fillColor('#444444').fontSize(20).text('Job Full History Report', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12).fillColor('#000000');
-        doc.text(`Project: ${job.projectId?.name || 'N/A'}`);
-        doc.text(`Job Name: ${job.name}`);
-        doc.text(`Foreman: ${job.foremanId?.fullName || 'Unassigned'}`);
-        doc.text(`Status: ${job.status.toUpperCase()}`);
-        doc.text(`Date Generated: ${new Date().toLocaleDateString()}`);
-        doc.moveDown();
+        doc.pipe(res);
 
-        // Worker Summary (Aggregate for PDF)
-        doc.fontSize(16).fillColor('#333333').text('Worker Summary', { underline: true });
-        doc.moveDown(0.5);
+        // --- Helper functions for drawing ---
+        const drawHorizontalLine = (yPos) => doc.strokeColor('#e5e7eb').lineWidth(1).moveTo(50, yPos).lineTo(545, yPos).stroke();
 
-        const workerStats = await JobTimeLog.aggregate([
+        // 1. Header Section
+        doc.fillColor('#1e293b').fontSize(24).font('Helvetica-Bold').text('KAAL CONSTRUCTION', 50, 50);
+        doc.fillColor('#64748b').fontSize(10).font('Helvetica').text('11520 84 street Nw, Edmonton,\nAlberta T5B 3B8, Canada', 50, 75);
+
+        // Invoice/Report Title block on the right
+        doc.fillColor('#1e293b').fontSize(22).font('Helvetica-Bold').text('JOB HISTORY REPORT', 320, 50, { align: 'right' });
+        doc.fontSize(10).fillColor('#64748b').font('Helvetica');
+        doc.text(`Reference No: ${job._id.toString().substring(0, 8).toUpperCase()}`, { align: 'right' });
+        doc.text(`Date Issued: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`, { align: 'right' });
+
+        doc.moveDown(3);
+        const yAfterHeader = doc.y + 10;
+
+        // 2. Info Grid
+        doc.roundedRect(50, yAfterHeader, 240, 100, 5).fill('#f8fafc').stroke('#e5e7eb');
+        doc.roundedRect(305, yAfterHeader, 240, 100, 5).fill('#f8fafc').stroke('#e5e7eb');
+
+        // Project / Job Box
+        doc.fillColor('#94a3b8').fontSize(8).font('Helvetica-Bold').text('PROJECT DETAILS', 65, yAfterHeader + 15);
+        doc.fillColor('#1e293b').fontSize(11).text(job.projectId?.name || 'N/A', 65, yAfterHeader + 30);
+        doc.fillColor('#64748b').fontSize(10).font('Helvetica').text(`Job: ${job.name}`, 65, yAfterHeader + 50);
+        doc.text(`Status: ${job.status.toUpperCase()}`, 65, yAfterHeader + 65);
+
+        // Assignment Box
+        doc.fillColor('#94a3b8').fontSize(8).font('Helvetica-Bold').text('PEOPLE INVOLVED', 320, yAfterHeader + 15);
+        doc.fillColor('#1e293b').fontSize(11).text(`Foreman: ${job.foremanId?.fullName || 'Unassigned'}`, 320, yAfterHeader + 30);
+
+        doc.moveDown(3);
+        let currentY = yAfterHeader + 120;
+
+        // --- Worker Summary Aggregation Calculation ---
+        const workerStats = await TimeLog.aggregate([
             { $match: { jobId: new mongoose.Types.ObjectId(jobId) } },
             {
+                $addFields: {
+                    durationHrs: {
+                        $cond: [
+                            { $and: ["$clockIn", "$clockOut"] },
+                            { $divide: [{ $subtract: ["$clockOut", "$clockIn"] }, 3600000] },
+                            0
+                        ]
+                    }
+                }
+            },
+            {
                 $group: {
-                    _id: '$workerId',
-                    totalHours: { $sum: '$totalHours' },
-                    days: { $addToSet: { $dateToString: { format: "%Y-%m-%d", date: "$workDate" } } }
+                    _id: '$userId',
+                    totalHours: { $sum: '$durationHrs' },
+                    days: { $addToSet: { $dateToString: { format: "%Y-%m-%d", date: "$clockIn" } } }
                 }
             }
         ]);
 
         const User = require('../models/User');
-        for (const stat of workerStats) {
+
+        doc.fillColor('#1e293b').fontSize(14).font('Helvetica-Bold').text('Worker Aggregation', 50, currentY);
+        currentY += 25;
+
+        // Table Header
+        doc.fillColor('#f1f5f9').rect(50, currentY, 495, 25).fill();
+        doc.fillColor('#475569').fontSize(9).font('Helvetica-Bold');
+        doc.text('WORKER NAME', 60, currentY + 8);
+        doc.text('DAYS ATTENDED', 250, currentY + 8);
+        doc.text('TOTAL HOURS', 450, currentY + 8, { align: 'right' });
+
+        currentY += 30;
+
+        // Table Rows
+        doc.font('Helvetica').fontSize(9);
+        for (let i = 0; i < workerStats.length; i++) {
+            const stat = workerStats[i];
             const user = await User.findById(stat._id).select('fullName');
-            doc.fontSize(10).fillColor('#000000')
-                .text(`${user?.fullName || 'Unknown'}: ${stat.totalHours.toFixed(2)} hrs over ${stat.days.length} days`);
+
+            if (i % 2 === 0) {
+                doc.fillColor('#f8fafc').rect(50, currentY - 5, 495, 20).fill();
+            }
+
+            doc.fillColor('#334155');
+            doc.text(user?.fullName || 'Unknown Employee', 60, currentY);
+            doc.text(stat.days.length.toString(), 250, currentY);
+            doc.text(`${stat.totalHours.toFixed(2)} hrs`, 450, currentY, { align: 'right' });
+
+            currentY += 20;
+
+            if (currentY > 750) {
+                doc.addPage();
+                currentY = 50;
+            }
         }
-        doc.moveDown();
 
-        // Daily Logs
-        doc.fontSize(16).fillColor('#333333').text('Daily Time Logs', { underline: true });
-        doc.moveDown(0.5);
-        dailyLogs.forEach(log => {
-            doc.fontSize(10).fillColor('#444444')
-                .text(`${new Date(log.workDate).toLocaleDateString()} - ${log.workerId?.fullName || 'Unknown'}: ${log.totalHours} hrs (${new Date(log.checkIn).toLocaleTimeString()} - ${log.checkOut ? new Date(log.checkOut).toLocaleTimeString() : 'N/A'})`);
+        currentY += 20;
+
+        // --- Daily Logs Section ---
+        if (currentY > 650) { doc.addPage(); currentY = 50; }
+
+        doc.fillColor('#1e293b').fontSize(14).font('Helvetica-Bold').text('Detailed Daily Time Logs', 50, currentY);
+        currentY += 25;
+
+        dailyLogs.forEach((log) => {
+            if (currentY > 780) { doc.addPage(); currentY = 50; }
+
+            doc.fillColor('#f1f5f9').roundedRect(50, currentY, 495, 30, 4).fill();
+
+            doc.fillColor('#334155').fontSize(9).font('Helvetica-Bold').text(new Date(log.workDate).toLocaleDateString(), 60, currentY + 10);
+            doc.font('Helvetica').text(log.workerId?.fullName || 'Unknown', 140, currentY + 10);
+
+            const timeStr = `${new Date(log.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${log.checkOut ? new Date(log.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending'}`;
+            doc.fillColor('#64748b').text(timeStr, 280, currentY + 10);
+
+            doc.font('Helvetica-Bold').fillColor('#0ea5e9').text(`${log.totalHours.toFixed(2)} hrs`, 450, currentY + 10, { align: 'right' });
+
+            currentY += 35;
         });
-        doc.moveDown();
 
-        // Activity Timeline
-        doc.fontSize(16).fillColor('#333333').text('Activity Timeline', { underline: true });
-        doc.moveDown(0.5);
-        activityLogs.forEach(log => {
-            doc.fontSize(10).fillColor('#666666')
-                .text(`[${new Date(log.createdAt).toLocaleString()}] ${log.actionType}: ${log.description} (by ${log.createdBy?.fullName || 'System'})`);
-        });
+        currentY += 20;
 
-        doc.pipe(res);
+        // --- Footer Note ---
+        if (currentY > 720) { doc.addPage(); currentY = 50; }
+
+        drawHorizontalLine(Math.max(currentY, 730));
+        doc.fillColor('#94a3b8').fontSize(8).font('Helvetica');
+        doc.text('Thank you for choosing KAAL Construction. This is a system-generated report.', 50, Math.max(currentY, 730) + 15, { align: 'center', width: 495 });
+
         doc.end();
 
     } catch (err) {

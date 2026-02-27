@@ -1,7 +1,23 @@
 const Task = require('../models/Task');
 const Job = require('../models/Job');
+const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const { dispatchNotification } = require('../utils/notificationHelper');
+
+// Helper: Validate if assigner can assign to given assignees based on role hierarchy
+const validateAssignmentHierarchy = async (assignerRole, assigneeIds) => {
+    if (!assigneeIds || assigneeIds.length === 0) return null; // No assignees is fine
+    const assignees = await User.find({ _id: { $in: assigneeIds } }).select('role fullName');
+    for (const assignee of assignees) {
+        if (assignerRole === 'PM' && assignee.role === 'WORKER') {
+            return `Project Manager cannot directly assign tasks to a Worker. Assign to Foreman or Subcontractor first. (Tried to assign to: ${assignee.fullName})`;
+        }
+        if (['FOREMAN', 'SUBCONTRACTOR'].includes(assignerRole) && !['WORKER'].includes(assignee.role)) {
+            return `${assignerRole} can only assign tasks to Workers. (Tried to assign to: ${assignee.fullName} who is ${assignee.role})`;
+        }
+    }
+    return null; // All valid
+};
 
 // @desc    Get tasks (role-based)
 // @route   GET /api/tasks
@@ -114,6 +130,12 @@ const createTask = async (req, res, next) => {
             ? (Array.isArray(assignedTo) ? assignedTo : [assignedTo]).filter(Boolean)
             : [];
 
+        // --- Role Hierarchy Validation ---
+        const hierarchyError = await validateAssignmentHierarchy(req.user.role, assignedToArr);
+        if (hierarchyError) {
+            return res.status(403).json({ message: hierarchyError });
+        }
+
         const task = await Task.create({
             companyId: req.user.companyId,
             projectId,
@@ -185,6 +207,12 @@ const assignTask = async (req, res, next) => {
         const assignedToArr = assignedTo
             ? (Array.isArray(assignedTo) ? assignedTo : [assignedTo]).filter(Boolean)
             : [];
+
+        // --- Role Hierarchy Validation ---
+        const hierarchyError = await validateAssignmentHierarchy(req.user.role, assignedToArr);
+        if (hierarchyError) {
+            return res.status(403).json({ message: hierarchyError });
+        }
 
         // Track previous assignees to notify new ones only
         const previousIds = task.assignedTo.map(id => id.toString());

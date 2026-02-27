@@ -1,6 +1,21 @@
 const JobTask = require('../models/JobTask');
 const Job = require('../models/Job');
+const User = require('../models/User');
 const Notification = require('../models/Notification');
+
+// Helper: Validate role-based assignment hierarchy
+const validateAssignmentHierarchy = async (assignerRole, assigneeId) => {
+    if (!assigneeId) return null;
+    const assignee = await User.findById(assigneeId).select('role fullName');
+    if (!assignee) return null;
+    if (assignerRole === 'PM' && assignee.role === 'WORKER') {
+        return `Project Manager cannot directly assign tasks to a Worker. Assign to Foreman or Subcontractor first. (Tried to assign to: ${assignee.fullName})`;
+    }
+    if (['FOREMAN', 'SUBCONTRACTOR'].includes(assignerRole) && assignee.role !== 'WORKER') {
+        return `${assignerRole} can only assign tasks to Workers. (Tried to assign to: ${assignee.fullName} who is ${assignee.role})`;
+    }
+    return null;
+};
 
 // Helper to update job progress
 const updateJobProgress = async (jobId) => {
@@ -27,12 +42,29 @@ const createJobTask = async (req, res) => {
     try {
         const { jobId, title, description, assignedTo, priority, dueDate } = req.body;
 
+        // --- Role Hierarchy Validation ---
+        const hierarchyError = await validateAssignmentHierarchy(req.user.role, assignedTo);
+        if (hierarchyError) {
+            return res.status(403).json({ message: hierarchyError });
+        }
+
+        let assignedForeman = null;
+        if (assignedTo) {
+            const assigneeInfo = await User.findById(assignedTo).select('role');
+            if (assigneeInfo && assigneeInfo.role === 'FOREMAN') {
+                assignedForeman = assignedTo;
+            } else if (req.user.role === 'FOREMAN') {
+                assignedForeman = req.user._id;
+            }
+        }
+
         const task = await JobTask.create({
             jobId,
             companyId: req.user.companyId,
             title,
             description,
             assignedTo,
+            assignedForeman,
             priority,
             dueDate,
             createdBy: req.user._id
@@ -112,6 +144,9 @@ const updateJobTask = async (req, res) => {
         } else {
             // Admin/PM/Foreman can update anything
             Object.assign(task, req.body);
+            if (req.body.assignedTo && req.user.role === 'FOREMAN' && !task.assignedForeman) {
+                task.assignedForeman = req.user._id;
+            }
         }
 
         await task.save();
@@ -181,10 +216,17 @@ const deleteJobTask = async (req, res) => {
 // @access  Private (Worker)
 const getWorkerTasks = async (req, res) => {
     try {
-        const tasks = await JobTask.find({
-            assignedTo: req.user._id,
+        const query = {
             companyId: req.user.companyId
-        })
+        };
+
+        if (req.user.role === 'FOREMAN') {
+            query.$or = [{ assignedTo: req.user._id }, { assignedForeman: req.user._id }];
+        } else {
+            query.assignedTo = req.user._id;
+        }
+
+        const tasks = await JobTask.find(query)
             .populate({
                 path: 'jobId',
                 select: 'name projectId',

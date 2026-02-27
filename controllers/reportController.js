@@ -357,20 +357,42 @@ const getDashboardStats = async (req, res, next) => {
                     jobId: j._id
                 }));
 
+            const JobTask = require('../models/JobTask');
+            const userJobTasks = await JobTask.find({
+                companyId,
+                $or: [{ assignedTo: userId }, { assignedForeman: userId }],
+                status: { $nin: ['completed', 'cancelled'] }
+            }).populate({
+                path: 'jobId',
+                select: 'name projectId',
+                populate: { path: 'projectId', select: 'name' }
+            });
+
+            const assignedTasks = userJobTasks.map(t => ({
+                _id: t._id,
+                title: t.title,
+                jobName: t.jobId?.name || 'Unknown Job',
+                projectName: t.jobId?.projectId?.name || 'Unknown Project',
+                jobId: t.jobId?._id,
+                projectId: t.jobId?.projectId?._id
+            }));
+
             stats.workerMetrics = {
                 myHoursToday: myHoursToday.toFixed(1) + 'h',
-                currentJob: activeLog?.projectId?.name || 'Not Clocked In',
+                currentJob: activeLog?.taskId?.title || activeLog?.projectId?.name || 'Not Clocked In',
                 weeklyTarget: '40h',
                 weeklyDone: Math.round(totalWeeklyHours) + 'h done',
                 isClockedIn: !!activeLog,
                 timer: activeLog ? Math.floor((new Date() - new Date(activeLog.clockIn)) / 1000) : 0,
-                assignedProjects: assignedProjects
+                assignedProjects: assignedProjects,
+                assignedTasks: assignedTasks
             };
 
             const myRecentActivity = await TimeLog.find({ userId })
                 .sort({ clockIn: -1 })
                 .limit(5)
-                .populate('projectId', 'name');
+                .populate('projectId', 'name')
+                .populate('taskId', 'title');
 
             stats.myRecentActivity = myRecentActivity.map(log => ({
                 id: log._id,
