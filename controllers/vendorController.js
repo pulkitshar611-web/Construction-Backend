@@ -119,7 +119,7 @@ exports.getBids = async (req, res) => {
     try {
         const companyId = req.user.companyId;
         const bids = await TradeBid.find({ companyId })
-            .populate('vendorId', 'name')
+            .populate('vendorId', 'name email')
             .populate('drawingId', 'title')
             .sort({ createdAt: -1 });
         res.json(bids);
@@ -133,12 +133,18 @@ exports.getBids = async (req, res) => {
 exports.getPublicDrawingInfo = async (req, res) => {
     try {
         const drawing = await Drawing.findById(req.params.id)
-            .populate('projectId', 'name')
-            .select('title drawingNumber category versions projectId companyId');
+            .populate('projectId', 'name');
 
         if (!drawing) return res.status(404).json({ message: 'Drawing not found' });
 
-        res.json(drawing);
+        res.json({
+            title: drawing.title,
+            drawingNumber: drawing.drawingNumber,
+            category: drawing.category,
+            projectId: drawing.projectId,
+            companyId: drawing.companyId,
+            versions: drawing.versions
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
