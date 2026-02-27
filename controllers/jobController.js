@@ -46,7 +46,7 @@ const getJobs = async (req, res) => {
         } else if (req.user.role === 'FOREMAN') {
             filter.foremanId = req.user._id;
         } else if (req.user.role === 'WORKER') {
-            filter.assignedWorkers = req.user._id;
+            filter.assignedWorkers = { $in: [req.user._id] };
         }
 
         const jobs = await Job.find(filter)
@@ -229,7 +229,12 @@ const updateJob = async (req, res) => {
 
         // 3. Log & Update Worker Assignments
         if (req.body.assignedWorkers) {
-            const newWorkers = req.body.assignedWorkers.map(id => id.toString());
+            const newWorkers = req.body.assignedWorkers.map(id => {
+                if (typeof id === 'object' && id !== null) {
+                    return (id._id || id).toString();
+                }
+                return id.toString();
+            });
 
             // Freshly added
             const added = newWorkers.filter(id => !oldWorkers.includes(id));
