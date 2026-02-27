@@ -438,12 +438,14 @@ const getDashboardStats = async (req, res, next) => {
         const topProjectId = Object.keys(projectProductivity).sort((a, b) => projectProductivity[b] - projectProductivity[a])[0];
         if (topProjectId) {
             const topProj = await Project.findById(topProjectId).populate('pmId', 'fullName');
-            stats.topProject = {
-                name: topProj.name,
-                manager: topProj.pmId?.fullName || 'Unassigned',
-                hours: Math.round(projectProductivity[topProjectId]),
-                image: topProj.image || 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?q=80&w=200'
-            };
+            if (topProj) {
+                stats.topProject = {
+                    name: topProj.name,
+                    manager: topProj.pmId?.fullName || 'Unassigned',
+                    hours: Math.round(projectProductivity[topProjectId]),
+                    image: topProj.image || 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?q=80&w=200'
+                };
+            }
         }
 
         res.json(stats);
