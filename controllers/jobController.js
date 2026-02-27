@@ -11,7 +11,10 @@ const updateProjectStats = async (projectId) => {
 // GET /jobs?projectId=xxx  — list jobs for a project
 const getJobs = async (req, res) => {
     try {
-        const filter = { companyId: req.user.companyId };
+        const filter = {};
+        if (req.user.role !== 'SUPER_ADMIN') {
+            filter.companyId = req.user.companyId;
+        }
 
         // If projectId is provided, use it
         if (req.query.projectId) {
