@@ -13,6 +13,7 @@ const {
     getProjectFinancialSummary
 } = require('../controllers/projectController');
 const { protect, authorize } = require('../middlewares/authMiddleware');
+const upload = require('../middlewares/uploadMiddleware');
 
 router.use(protect); // All routes protected
 
@@ -24,7 +25,7 @@ router.post('/:id/assign-pm', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), updateP
 router.patch('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), updateProject);
 router.get('/:id/client-progress', getClientProgress);
 router.get('/:id/client-updates', getProjectClientUpdates);
-router.post('/:id/client-updates', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), createProjectClientUpdate);
+router.post('/:id/client-updates', authorize('SUPER_ADMIN', 'COMPANY_OWNER', 'PM'), upload.array('images', 5), createProjectClientUpdate);
 router.get('/:id/financial-summary', getProjectFinancialSummary);
 router.delete('/:id', authorize('SUPER_ADMIN', 'COMPANY_OWNER'), deleteProject);
 

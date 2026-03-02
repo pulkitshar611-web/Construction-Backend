@@ -356,11 +356,53 @@ const getProjectClientUpdates = async (req, res, next) => {
 const createProjectClientUpdate = async (req, res, next) => {
     try {
         const ProjectUpdate = require('../models/ProjectUpdate');
+        const Notification = require('../models/Notification');
+        const Project = require('../models/Project');
+
+        // Handle images from multer (CloudinaryStorage)
+        let images = [];
+        if (req.files && req.files.length > 0) {
+            images = req.files.map(file => file.path);
+        }
+
+        // Parse isVisibleToClient from FormData (comes as string)
+        const isVisibleToClient = req.body.isVisibleToClient === 'true' || req.body.isVisibleToClient === true;
+
         const update = await ProjectUpdate.create({
-            ...req.body,
+            title: req.body.title,
+            description: req.body.description,
+            date: req.body.date || new Date(),
+            isVisibleToClient,
+            images,
             projectId: req.params.id,
             createdBy: req.user._id
         });
+
+        // --- Notification Logic ---
+        if (isVisibleToClient) {
+            const project = await Project.findById(req.params.id);
+            if (project && project.clientId) {
+                // Create notification for client
+                await Notification.create({
+                    companyId: req.user.companyId,
+                    userId: project.clientId,
+                    title: 'New Project Update',
+                    message: `A new update has been posted for project: "${project.name}".`,
+                    type: 'system',
+                    link: `/client-portal/progress/${project._id}`
+                });
+
+                // Emit socket event if io is available
+                const io = req.app.get('io');
+                if (io) {
+                    io.to(project.clientId.toString()).emit('new_notification', {
+                        title: 'New Project Update',
+                        message: `A new update has been posted for project: "${project.name}".`
+                    });
+                }
+            }
+        }
+
         res.status(201).json(update);
     } catch (error) {
         next(error);
