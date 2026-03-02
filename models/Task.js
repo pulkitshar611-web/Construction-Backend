@@ -77,7 +77,15 @@ const taskSchema = new mongoose.Schema({
         type: String
     },
     // Audit trail for status changes
-    statusHistory: [statusHistorySchema]
+    statusHistory: [statusHistorySchema],
+    progress: {
+        type: Number,
+        default: 0
+    },
+    subTaskCount: {
+        type: Number,
+        default: 0
+    }
 }, {
     timestamps: true
 });

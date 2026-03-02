@@ -86,9 +86,120 @@ const deleteDailyLog = async (req, res, next) => {
     }
 };
 
+// @desc    Get daily log reports (Summary + Charts)
+// @route   GET /api/dailylogs/reports
+// @access  Private (Admin, PM)
+const getDailyLogReports = async (req, res, next) => {
+    try {
+        const { projectId, from, to } = req.query;
+        const query = { companyId: req.user.companyId };
+
+        // Role-based visibility
+        if (req.user.role === 'PM') {
+            const Project = require('../models/Project');
+            const pmProjects = await Project.find({
+                $or: [
+                    { pmId: req.user._id },
+                    { createdBy: req.user._id }
+                ]
+            }).select('_id');
+            const projectIds = pmProjects.map(p => p._id);
+
+            if (projectId) {
+                if (!projectIds.some(id => id.toString() === projectId)) {
+                    return res.status(403).json({ message: 'Not authorized for this project' });
+                }
+                query.projectId = projectId;
+            } else {
+                query.projectId = { $in: projectIds };
+            }
+        } else if (projectId) {
+            query.projectId = projectId;
+        }
+
+        if (from || to) {
+            query.date = {};
+            if (from) query.date.$gte = new Date(from);
+            if (to) query.date.$lte = new Date(to);
+        }
+
+        const logs = await DailyLog.find(query).sort({ date: 1 });
+
+        // Summary Statistics
+        const totalLogs = logs.length;
+        const distinctDays = new Set(logs.map(l => l.date.toISOString().split('T')[0])).size;
+
+        let totalManpower = 0;
+        logs.forEach(log => {
+            log.manpower.forEach(m => (totalManpower += m.count || 0));
+        });
+
+        // Charts Data
+        // 1. Manpower Trend
+        const manpowerTrend = logs.reduce((acc, log) => {
+            const dateStr = log.date.toISOString().split('T')[0];
+            const dayCount = log.manpower.reduce((sum, m) => sum + (m.count || 0), 0);
+            const existing = acc.find(a => a.date === dateStr);
+            if (existing) existing.count += dayCount;
+            else acc.push({ date: dateStr, count: dayCount });
+            return acc;
+        }, []);
+
+        // 2. Weather Distribution
+        const weatherDist = logs.reduce((acc, log) => {
+            const status = log.weather?.status || 'Unknown';
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+        }, {});
+        const weatherChart = Object.keys(weatherDist).map(k => ({ name: k, value: weatherDist[k] }));
+
+        // 3. Activity Frequency - dynamic word frequency from actual work performed text
+        const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'shall', 'can', 'not', 'no', 'nor', 'so', 'yet', 'both', 'either', 'neither', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'than', 'that', 'these', 'this', 'those', 'up', 'also', 'as', 'it']);
+        const wordFreq = {};
+        logs.forEach(log => {
+            if (!log.workPerformed) return;
+            const words = log.workPerformed
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(w => w.length > 2 && !stopWords.has(w));
+            words.forEach(w => {
+                wordFreq[w] = (wordFreq[w] || 0) + 1;
+            });
+        });
+        const activityChart = Object.entries(wordFreq)
+            .map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10); // top 10 most frequent terms
+
+        res.json({
+            summary: {
+                totalLogs,
+                distinctDays,
+                totalManpower,
+                avgWorkers: distinctDays > 0 ? (totalManpower / distinctDays).toFixed(1) : 0
+            },
+            charts: {
+                manpowerTrend,
+                weatherChart,
+                activityChart
+            },
+            logs: logs.map(l => ({
+                date: l.date,
+                weather: l.weather,
+                workPerformed: l.workPerformed,
+                manpower: l.manpower
+            }))
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDailyLogs,
     createDailyLog,
     verifyDailyLog,
-    deleteDailyLog
+    deleteDailyLog,
+    getDailyLogReports
 };

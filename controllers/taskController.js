@@ -1,4 +1,6 @@
+const mongoose = require('mongoose');
 const Task = require('../models/Task');
+const SubTask = require('../models/SubTask');
 const Job = require('../models/Job');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
@@ -32,16 +34,27 @@ const getTasks = async (req, res, next) => {
         if (req.query.priority) query.priority = req.query.priority;
         if (req.query.assignedRoleType) query.assignedRoleType = req.query.assignedRoleType;
 
-        // WORKER or SUBCONTRACTOR: only own assigned tasks
+        // WORKER or SUBCONTRACTOR: only own assigned tasks OR tasks where they have sub-tasks
         if (['WORKER', 'SUBCONTRACTOR'].includes(role)) {
-            query.assignedTo = userId;
+            const subTaskTaskIds = await SubTask.find({ assignedTo: userId, companyId }).distinct('taskId');
+            query.$or = [
+                { assignedTo: userId },
+                { _id: { $in: subTaskTaskIds } }
+            ];
         }
         // FOREMAN: own tasks + tasks assigned to workers in their managed jobs
         else if (role === 'FOREMAN') {
             const managedJobs = await Job.find({ foremanId: userId, companyId }).select('assignedWorkers');
             const workerIds = managedJobs.flatMap(j => j.assignedWorkers || []);
             const allIds = [userId, ...workerIds];
-            query.assignedTo = { $in: allIds };
+
+            // Also include tasks where they have sub-tasks
+            const subTaskTaskIds = await SubTask.find({ assignedTo: userId, companyId }).distinct('taskId');
+
+            query.$or = [
+                { assignedTo: { $in: allIds } },
+                { _id: { $in: subTaskTaskIds } }
+            ];
         }
         // PM / COMPANY_OWNER / SUPER_ADMIN / ENGINEER: all company tasks
 
@@ -63,9 +76,14 @@ const getTasks = async (req, res, next) => {
 // @access  Private
 const getMyTasks = async (req, res, next) => {
     try {
+        const subTaskTaskIds = await SubTask.find({ assignedTo: req.user._id, companyId: req.user.companyId }).distinct('taskId');
+
         const query = {
             companyId: req.user.companyId,
-            assignedTo: req.user._id
+            $or: [
+                { assignedTo: req.user._id },
+                { _id: { $in: subTaskTaskIds } }
+            ]
         };
         if (req.query.status) query.status = req.query.status;
 
@@ -91,14 +109,23 @@ const getProjectTasks = async (req, res, next) => {
 
         const query = { companyId, projectId };
 
-        // Workers/Subcontractors see only their own tasks for the project
+        // Workers/Subcontractors see only their own tasks for the project (inc. sub-tasks)
         if (['WORKER', 'SUBCONTRACTOR'].includes(role)) {
-            query.assignedTo = userId;
+            const subTaskTaskIds = await SubTask.find({ assignedTo: userId, companyId, taskId: { $exists: true } }).distinct('taskId');
+            query.$or = [
+                { assignedTo: userId },
+                { _id: { $in: subTaskTaskIds } }
+            ];
         } else if (role === 'FOREMAN') {
             const managedJobs = await Job.find({ foremanId: userId, companyId }).select('assignedWorkers');
             const workerIds = managedJobs.flatMap(j => j.assignedWorkers || []);
             const allIds = [userId, ...workerIds];
-            query.assignedTo = { $in: allIds };
+            const subTaskTaskIds = await SubTask.find({ assignedTo: userId, companyId }).distinct('taskId');
+
+            query.$or = [
+                { assignedTo: { $in: allIds } },
+                { _id: { $in: subTaskTaskIds } }
+            ];
         }
 
         const tasks = await Task.find(query)
@@ -384,6 +411,168 @@ const deleteTask = async (req, res, next) => {
     }
 };
 
+// --- Sub-Tasks ---
+
+// @desc    Get sub-tasks for a task
+// @route   GET /api/tasks/:id/subtasks
+// @access  Private
+const getSubTasks = async (req, res, next) => {
+    try {
+        const isAdmin = ['ADMIN', 'SUPER_ADMIN', 'COMPANY_OWNER', 'PM'].includes(req.user.role);
+
+        const filter = {
+            taskId: req.params.id,
+            companyId: req.user.companyId
+        };
+
+        // Strict filtering for Foremen/Subcontractors/Workers
+        if (!isAdmin) {
+            filter.$or = [
+                { assignedTo: req.user._id },
+                { createdBy: req.user._id }
+            ];
+        }
+
+        const subTasks = await require('../models/SubTask').find(filter)
+            .populate('assignedTo', 'fullName role')
+            .sort({ createdAt: 1 });
+
+        res.json(subTasks);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Create a sub-task
+// @route   POST /api/tasks/:id/subtasks
+// @access  Private
+// @desc    Create a sub-task
+// @route   POST /api/tasks/:id/subtasks
+// @access  Private
+const createSubTask = async (req, res, next) => {
+    try {
+        const { title, assignedTo, dueDate, remarks, priority } = req.body;
+
+        const parentTask = await Task.findById(req.params.id);
+        if (!parentTask) {
+            res.status(404);
+            throw new Error('Main task not found');
+        }
+
+        const subTask = await SubTask.create({
+            taskId: req.params.id,
+            companyId: req.user.companyId,
+            title,
+            assignedTo: assignedTo || null,
+            dueDate: dueDate || undefined,
+            remarks: remarks || '',
+            priority: priority || 'Medium',
+            createdBy: req.user._id
+        });
+
+        // Update main task count and progress
+        const allSubTasks = await SubTask.find({ taskId: req.params.id });
+        const completed = allSubTasks.filter(st => st.status === 'completed').length;
+        const progress = Math.round((completed / allSubTasks.length) * 100);
+
+        // Still add to assignedTo for performance and to ensure visibility in standard queries
+        const updateData = {
+            subTaskCount: allSubTasks.length,
+            progress
+        };
+
+        if (assignedTo) {
+            await Task.findByIdAndUpdate(req.params.id, {
+                $addToSet: { assignedTo: new mongoose.Types.ObjectId(assignedTo) },
+                ...updateData
+            });
+
+            // Send Notification
+            await dispatchNotification(req, {
+                userId: assignedTo,
+                title: 'New Sub-Task Assigned',
+                message: `You were assigned a sub-task: "${title}" in "${parentTask.title}"`,
+                link: '/tasks',
+                type: 'task'
+            });
+        } else {
+            await Task.findByIdAndUpdate(req.params.id, updateData);
+        }
+
+        const populated = await SubTask.findById(subTask._id).populate('assignedTo', 'fullName role');
+        res.status(201).json(populated);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Update sub-task status
+// @route   PATCH /api/tasks/:id/subtasks/:subTaskId
+// @access  Private
+const updateSubTask = async (req, res, next) => {
+    try {
+        const updates = req.body;
+        const SubTask = require('../models/SubTask');
+
+        const subTask = await SubTask.findOneAndUpdate(
+            { _id: req.params.subTaskId, taskId: req.params.id },
+            { $set: updates },
+            { new: true }
+        );
+
+        if (!subTask) {
+            res.status(404);
+            throw new Error('Sub-task not found');
+        }
+
+        // Recalculate main task progress
+        const allSubTasks = await SubTask.find({ taskId: req.params.id });
+        const completedCount = allSubTasks.filter(st => st.status === 'completed').length;
+        const progress = allSubTasks.length > 0 ? Math.round((completedCount / allSubTasks.length) * 100) : 0;
+
+        const updateData = { progress };
+        if (progress === 100 && allSubTasks.length > 0) {
+            updateData.status = 'completed';
+        }
+
+        await Task.findByIdAndUpdate(req.params.id, updateData);
+
+        const populated = await SubTask.findById(subTask._id).populate('assignedTo', 'fullName role');
+        res.json(populated);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Delete sub-task
+// @route   DELETE /api/tasks/:id/subtasks/:subTaskId
+// @access  Private
+const deleteSubTask = async (req, res, next) => {
+    try {
+        const SubTask = require('../models/SubTask');
+        const subTask = await SubTask.findOneAndDelete({ _id: req.params.subTaskId, taskId: req.params.id });
+
+        if (!subTask) {
+            res.status(404);
+            throw new Error('Sub-task not found');
+        }
+
+        // Recalculate main task progress
+        const allSubTasks = await SubTask.find({ taskId: req.params.id });
+        const completedCount = allSubTasks.filter(st => st.status === 'completed').length;
+        const progress = allSubTasks.length > 0 ? Math.round((completedCount / allSubTasks.length) * 100) : 0;
+
+        await Task.findByIdAndUpdate(req.params.id, {
+            $set: { progress },
+            $inc: { subTaskCount: -1 }
+        });
+
+        res.json({ message: 'Sub-task deleted successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getTasks,
     getMyTasks,
@@ -391,5 +580,9 @@ module.exports = {
     createTask,
     assignTask,
     updateTask,
-    deleteTask
+    deleteTask,
+    getSubTasks,
+    createSubTask,
+    updateSubTask,
+    deleteSubTask
 };
