@@ -418,23 +418,41 @@ const deleteTask = async (req, res, next) => {
 // @access  Private
 const getSubTasks = async (req, res, next) => {
     try {
-        const isAdmin = ['ADMIN', 'SUPER_ADMIN', 'COMPANY_OWNER', 'PM'].includes(req.user.role);
+        const { role, _id: userId, companyId } = req.user;
+        const isAdminOrPM = ['SUPER_ADMIN', 'COMPANY_OWNER', 'PM', 'ADMIN'].includes(role);
+
+        let visibleSubTaskIds = null; // null = no restriction (admin/PM)
+
+        if (!isAdminOrPM) {
+            // Collect all subtasks for this task first
+            const allForTask = await SubTask.find({ taskId: req.params.id, companyId }).select('_id assignedTo createdBy parentSubTaskId');
+
+            if (role === 'FOREMAN') {
+                // Foreman sees subtasks assigned to themselves OR workers in their managed jobs
+                const managedJobs = await Job.find({ foremanId: userId, companyId }).select('assignedWorkers');
+                const workerIds = managedJobs.flatMap(j => (j.assignedWorkers || []).map(id => id.toString()));
+                const allowedIds = new Set([userId.toString(), ...workerIds]);
+
+                visibleSubTaskIds = allForTask
+                    .filter(st => allowedIds.has(st.assignedTo?.toString()) || st.createdBy?.toString() === userId.toString())
+                    .map(st => st._id);
+            } else {
+                // WORKER / SUBCONTRACTOR — only see subtasks directly assigned to them
+                visibleSubTaskIds = allForTask
+                    .filter(st => st.assignedTo?.toString() === userId.toString() || st.createdBy?.toString() === userId.toString())
+                    .map(st => st._id);
+            }
+        }
 
         const filter = {
             taskId: req.params.id,
-            companyId: req.user.companyId
+            companyId,
+            ...(visibleSubTaskIds !== null && { _id: { $in: visibleSubTaskIds } })
         };
 
-        // Strict filtering for Foremen/Subcontractors/Workers
-        if (!isAdmin) {
-            filter.$or = [
-                { assignedTo: req.user._id },
-                { createdBy: req.user._id }
-            ];
-        }
-
-        const subTasks = await require('../models/SubTask').find(filter)
+        const subTasks = await SubTask.find(filter)
             .populate('assignedTo', 'fullName role')
+            .populate('createdBy', 'fullName')
             .sort({ createdAt: 1 });
 
         res.json(subTasks);
@@ -443,15 +461,42 @@ const getSubTasks = async (req, res, next) => {
     }
 };
 
+
 // @desc    Create a sub-task
 // @route   POST /api/tasks/:id/subtasks
 // @access  Private
 // @desc    Create a sub-task
 // @route   POST /api/tasks/:id/subtasks
 // @access  Private
+// Helper: recursively delete a subtask and all its descendants
+const deleteSubTaskCascade = async (subTaskId) => {
+    const children = await SubTask.find({ parentSubTaskId: subTaskId });
+    for (const child of children) {
+        await deleteSubTaskCascade(child._id);
+    }
+    await SubTask.findByIdAndDelete(subTaskId);
+};
+
+// Helper: recalculate progress on a parent subtask based on its direct children
+const recalcSubTaskProgress = async (parentSubTaskId) => {
+    if (!parentSubTaskId) return;
+    const children = await SubTask.find({ parentSubTaskId });
+    if (children.length === 0) {
+        await SubTask.findByIdAndUpdate(parentSubTaskId, { subTaskCount: 0, progress: 0 });
+        return;
+    }
+    const completedCount = children.filter(c => c.status === 'completed').length;
+    const progress = Math.round((completedCount / children.length) * 100);
+    await SubTask.findByIdAndUpdate(parentSubTaskId, {
+        subTaskCount: children.length,
+        progress,
+        status: progress === 100 ? 'completed' : (progress > 0 ? 'in_progress' : 'todo')
+    });
+};
+
 const createSubTask = async (req, res, next) => {
     try {
-        const { title, assignedTo, dueDate, remarks, priority } = req.body;
+        const { title, assignedTo, dueDate, remarks, priority, parentSubTaskId } = req.body;
 
         const parentTask = await Task.findById(req.params.id);
         if (!parentTask) {
@@ -459,8 +504,18 @@ const createSubTask = async (req, res, next) => {
             throw new Error('Main task not found');
         }
 
+        // If nesting under another subtask, validate it exists
+        if (parentSubTaskId) {
+            const parentSub = await SubTask.findById(parentSubTaskId);
+            if (!parentSub) {
+                res.status(404);
+                throw new Error('Parent subtask not found');
+            }
+        }
+
         const subTask = await SubTask.create({
             taskId: req.params.id,
+            parentSubTaskId: parentSubTaskId || null,
             companyId: req.user.companyId,
             title,
             assignedTo: assignedTo || null,
@@ -470,24 +525,23 @@ const createSubTask = async (req, res, next) => {
             createdBy: req.user._id
         });
 
-        // Update main task count and progress
-        const allSubTasks = await SubTask.find({ taskId: req.params.id });
-        const completed = allSubTasks.filter(st => st.status === 'completed').length;
-        const progress = Math.round((completed / allSubTasks.length) * 100);
+        // Update parent subtask counts if nested
+        if (parentSubTaskId) {
+            await recalcSubTaskProgress(parentSubTaskId);
+        }
 
-        // Still add to assignedTo for performance and to ensure visibility in standard queries
-        const updateData = {
-            subTaskCount: allSubTasks.length,
-            progress
-        };
+        // Update root task count and progress (based on top-level subtasks only)
+        const topLevelSubTasks = await SubTask.find({ taskId: req.params.id, parentSubTaskId: null });
+        const completed = topLevelSubTasks.filter(st => st.status === 'completed').length;
+        const progress = topLevelSubTasks.length > 0 ? Math.round((completed / topLevelSubTasks.length) * 100) : 0;
+
+        const updateData = { subTaskCount: topLevelSubTasks.length, progress };
 
         if (assignedTo) {
             await Task.findByIdAndUpdate(req.params.id, {
                 $addToSet: { assignedTo: new mongoose.Types.ObjectId(assignedTo) },
                 ...updateData
             });
-
-            // Send Notification
             await dispatchNotification(req, {
                 userId: assignedTo,
                 title: 'New Sub-Task Assigned',
@@ -499,7 +553,9 @@ const createSubTask = async (req, res, next) => {
             await Task.findByIdAndUpdate(req.params.id, updateData);
         }
 
-        const populated = await SubTask.findById(subTask._id).populate('assignedTo', 'fullName role');
+        const populated = await SubTask.findById(subTask._id)
+            .populate('assignedTo', 'fullName role')
+            .populate('createdBy', 'fullName');
         res.status(201).json(populated);
     } catch (error) {
         next(error);
@@ -544,27 +600,35 @@ const updateSubTask = async (req, res, next) => {
     }
 };
 
-// @desc    Delete sub-task
+// @desc    Delete sub-task (+ all nested children)
 // @route   DELETE /api/tasks/:id/subtasks/:subTaskId
 // @access  Private
 const deleteSubTask = async (req, res, next) => {
     try {
-        const SubTask = require('../models/SubTask');
-        const subTask = await SubTask.findOneAndDelete({ _id: req.params.subTaskId, taskId: req.params.id });
+        const subTask = await SubTask.findOne({ _id: req.params.subTaskId, taskId: req.params.id });
 
         if (!subTask) {
             res.status(404);
             throw new Error('Sub-task not found');
         }
 
-        // Recalculate main task progress
-        const allSubTasks = await SubTask.find({ taskId: req.params.id });
-        const completedCount = allSubTasks.filter(st => st.status === 'completed').length;
-        const progress = allSubTasks.length > 0 ? Math.round((completedCount / allSubTasks.length) * 100) : 0;
+        const parentSubTaskId = subTask.parentSubTaskId;
+
+        // Cascade delete this subtask and all its descendants
+        await deleteSubTaskCascade(req.params.subTaskId);
+
+        // Recalculate parent subtask progress if nested
+        if (parentSubTaskId) {
+            await recalcSubTaskProgress(parentSubTaskId);
+        }
+
+        // Recalculate root task progress based on top-level subtasks
+        const topLevelSubTasks = await SubTask.find({ taskId: req.params.id, parentSubTaskId: null });
+        const completedCount = topLevelSubTasks.filter(st => st.status === 'completed').length;
+        const progress = topLevelSubTasks.length > 0 ? Math.round((completedCount / topLevelSubTasks.length) * 100) : 0;
 
         await Task.findByIdAndUpdate(req.params.id, {
-            $set: { progress },
-            $inc: { subTaskCount: -1 }
+            $set: { progress, subTaskCount: topLevelSubTasks.length }
         });
 
         res.json({ message: 'Sub-task deleted successfully' });

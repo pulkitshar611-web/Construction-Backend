@@ -7,6 +7,13 @@ const subTaskSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    // If set, this is a child of another subtask (nested)
+    parentSubTaskId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SubTask',
+        default: null,
+        index: true
+    },
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Company',
@@ -44,6 +51,16 @@ const subTaskSchema = new mongoose.Schema({
     photoUrl: {
         type: String,
         default: ''
+    },
+    // How many direct children this subtask has
+    subTaskCount: {
+        type: Number,
+        default: 0
+    },
+    // Progress based on child completion
+    progress: {
+        type: Number,
+        default: 0
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
