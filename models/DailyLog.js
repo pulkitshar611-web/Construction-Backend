@@ -42,6 +42,12 @@ const dailyLogSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    photos: [String],
+    location: {
+        latitude: Number,
+        longitude: Number,
+        address: String
+    },
     verifiedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
@@ -49,6 +55,10 @@ const dailyLogSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+// Indexes for fast date range and project lookups
+dailyLogSchema.index({ companyId: 1, projectId: 1, date: -1 });
+dailyLogSchema.index({ companyId: 1, date: -1 });
 
 const DailyLog = mongoose.model('DailyLog', dailyLogSchema);
 

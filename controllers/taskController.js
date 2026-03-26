@@ -33,6 +33,7 @@ const getTasks = async (req, res, next) => {
         if (req.query.status) query.status = req.query.status;
         if (req.query.priority) query.priority = req.query.priority;
         if (req.query.assignedRoleType) query.assignedRoleType = req.query.assignedRoleType;
+        if (req.query.category) query.category = req.query.category;
 
         // WORKER or SUBCONTRACTOR: only own assigned tasks OR tasks where they have sub-tasks
         if (['WORKER', 'SUBCONTRACTOR'].includes(role)) {
@@ -63,7 +64,7 @@ const getTasks = async (req, res, next) => {
             .populate('assignedTo', 'fullName email role')
             .populate('createdBy', 'fullName')
             .populate('assignedBy', 'fullName')
-            .sort({ dueDate: 1, createdAt: -1 });
+            .sort({ position: 1, dueDate: 1, createdAt: -1 });
 
         res.json(tasks);
     } catch (error) {
@@ -146,31 +147,45 @@ const getProjectTasks = async (req, res, next) => {
 // @access  Private (Admin, PM, Foreman)
 const createTask = async (req, res, next) => {
     try {
-        const { title, description, projectId, assignedTo, assignedRoleType, priority, status, dueDate, startDate } = req.body;
+        const { title, description, projectId, assignedTo, assignedRoleType, priority, status, dueDate, startDate, subTasksList, category } = req.body;
 
         if (!projectId) {
             res.status(400);
             throw new Error('projectId is required');
         }
 
-        const assignedToArr = assignedTo
+        const assignedToArr = (assignedTo
             ? (Array.isArray(assignedTo) ? assignedTo : [assignedTo]).filter(Boolean)
-            : [];
+            : []).map(id => id.toString());
 
-        // --- Role Hierarchy Validation ---
-        const hierarchyError = await validateAssignmentHierarchy(req.user.role, assignedToArr);
-        if (hierarchyError) {
-            return res.status(403).json({ message: hierarchyError });
+        // Default to self if it's a TODO and no one is assigned
+        if (category === 'TODO' && assignedToArr.length === 0) {
+            assignedToArr.push(req.user._id.toString());
+        }
+
+        // --- Role Hierarchy & Permission Validation ---
+        // Workers/Subcontractors can ONLY assign to themselves
+        if (['WORKER', 'SUBCONTRACTOR'].includes(req.user.role)) {
+            if (assignedToArr.length > 1 || (assignedToArr.length === 1 && assignedToArr[0] !== req.user._id.toString())) {
+                return res.status(403).json({ message: 'Workers can only create personal tasks assigned to themselves.' });
+            }
+        } else {
+            // Check role hierarchy for management roles
+            const hierarchyError = await validateAssignmentHierarchy(req.user.role, assignedToArr);
+            if (hierarchyError) {
+                return res.status(403).json({ message: hierarchyError });
+            }
         }
 
         const task = await Task.create({
             companyId: req.user.companyId,
             projectId,
             title,
+            category: category || 'TASK',
             description: description || '',
             assignedTo: assignedToArr,
             assignedRoleType: assignedRoleType || '',
-            assignedBy: assignedToArr.length > 0 ? req.user._id : undefined,
+            assignedBy: req.user._id,
             priority: priority || 'Medium',
             status: status || 'todo',
             dueDate: dueDate || undefined,
@@ -205,6 +220,21 @@ const createTask = async (req, res, next) => {
             await syncProjectParticipants(projectId);
         } catch (syncError) {
             console.error('Task Create: Failed to sync chat participants:', syncError);
+        }
+
+        // Generate auto steps if passed via subTasksList (Task Template feature)
+        if (subTasksList && Array.isArray(subTasksList) && subTasksList.length > 0) {
+            const steps = subTasksList.map(step => ({
+                taskId: task._id,
+                companyId: req.user.companyId,
+                title: step.title,
+                remarks: step.remarks || '',
+                priority: step.priority || 'Medium',
+                createdBy: req.user._id
+            }));
+            await SubTask.insertMany(steps);
+            task.subTaskCount = steps.length;
+            await task.save();
         }
 
         const populated = await Task.findById(task._id)
@@ -411,6 +441,35 @@ const deleteTask = async (req, res, next) => {
     }
 };
 
+// @desc    Reorder tasks
+// @route   PATCH /api/tasks/reorder
+// @access  Private
+const reorderTasks = async (req, res, next) => {
+    try {
+        const { tasks } = req.body; // Array of { id, status, position }
+        
+        if (!Array.isArray(tasks)) {
+            res.status(400);
+            throw new Error('Invalid format: Extpected an array of tasks.');
+        }
+
+        const bulkOps = tasks.map((task, index) => ({
+            updateOne: {
+                filter: { _id: task.id, companyId: req.user.companyId },
+                update: { status: task.status, position: task.position !== undefined ? task.position : index }
+            }
+        }));
+
+        if (bulkOps.length > 0) {
+            await Task.bulkWrite(bulkOps);
+        }
+
+        res.json({ message: 'Tasks reordered successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // --- Sub-Tasks ---
 
 // @desc    Get sub-tasks for a task
@@ -519,6 +578,7 @@ const createSubTask = async (req, res, next) => {
             companyId: req.user.companyId,
             title,
             assignedTo: assignedTo || null,
+            startDate: startDate || undefined,
             dueDate: dueDate || undefined,
             remarks: remarks || '',
             priority: priority || 'Medium',
@@ -645,6 +705,7 @@ module.exports = {
     assignTask,
     updateTask,
     deleteTask,
+    reorderTasks,
     getSubTasks,
     createSubTask,
     updateSubTask,

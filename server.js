@@ -38,6 +38,8 @@ const payrollRoutes = require('./routes/payrollRoutes');
 const vendorRoutes = require('./routes/vendorRoutes');
 const correctionRoutes = require('./routes/correctionRoutes');
 const jobTaskRoutes = require('./routes/jobTaskRoutes');
+const taskTemplateRoutes = require('./routes/taskTemplateRoutes');
+const todoRoutes = require('./routes/todoRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -45,7 +47,7 @@ const server = http.createServer(app);
 // Socket.io Setup
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow all origins for now (adjust for production)
+        origin: "*" , // Allow all origins for now (adjust for production)
         methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
     }
 });
@@ -89,6 +91,8 @@ app.use('/api/payroll', payrollRoutes);
 app.use('/api/vendors', vendorRoutes);
 app.use('/api/corrections', correctionRoutes);
 app.use('/api/job-tasks', jobTaskRoutes);
+app.use('/api/task-templates', taskTemplateRoutes);
+app.use('/api/todos', todoRoutes);
 
 // Root Route
 app.get('/', (req, res) => {

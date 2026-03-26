@@ -231,10 +231,17 @@ const updateUser = async (req, res, next) => {
             throw new Error('Not authorized to update this user');
         }
 
-        const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, {
-            new: true,
-            runValidators: true
-        }).select('-password');
+        // Update fields
+        Object.keys(req.body).forEach(key => {
+            if (key !== '_id' && key !== 'companyId') {
+                user[key] = req.body[key];
+            }
+        });
+
+        await user.save();
+        
+        const updatedUser = user.toObject();
+        delete updatedUser.password;
 
         res.json(updatedUser);
     } catch (error) {
